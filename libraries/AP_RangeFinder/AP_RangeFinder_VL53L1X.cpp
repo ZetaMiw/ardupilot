@@ -78,7 +78,7 @@ bool AP_RangeFinder_VL53L1X::check_id(void)
     }
 
     if ((v1 != 0xEA) ||
-        (v2 != 0xCC)) {
+        (v2 != 0xAA) {
         return false;
     }
     printf("Detected VL53L1X on bus 0x%x\n", unsigned(dev->get_bus_id()));
