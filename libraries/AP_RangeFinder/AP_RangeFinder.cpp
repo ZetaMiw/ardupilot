@@ -356,6 +356,7 @@ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial_instance)
 #endif
     case Type::VL53L0X:
     case Type::VL53L1X_Short:
+    case Type::VL53L1X_Medium:
             FOREACH_I2C(i) {
 #if AP_RANGEFINDER_VL53L0X_ENABLED
                 if (_add_backend(AP_RangeFinder_VL53L0X::detect(state[instance], params[instance],
@@ -368,6 +369,7 @@ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial_instance)
                 if (_add_backend(AP_RangeFinder_VL53L1X::detect(state[instance], params[instance],
                                                                 hal.i2c_mgr->get_device(i, params[instance].address),
                                                                 _type == Type::VL53L1X_Short ?  AP_RangeFinder_VL53L1X::DistanceMode::Short :
+                                                                _type == Type::VL53L1X_Medium ? AP_RangeFinder_VL53L1X::DistanceMode::Medium :
                                                                 AP_RangeFinder_VL53L1X::DistanceMode::Long),
                                  instance)) {
                     break;
