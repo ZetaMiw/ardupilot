@@ -53,6 +53,7 @@ public:
         UAVCAN = 6,
         MSP = 7,
         UPFLOW = 8,
+        PMW3901 = 9,
         SITL = 10,
     };
 
