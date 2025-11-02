@@ -419,10 +419,26 @@ bool AP_RangeFinder_VL53L3CX::read_multi(uint16_t reg, uint8_t *data, uint8_t le
 
 bool AP_RangeFinder_VL53L3CX::write_multi(uint16_t reg, const uint8_t *data, uint8_t len)
 {
-    uint8_t b[2] = { uint8_t(reg >> 8), uint8_t(reg & 0xFF) };
-    // Would need to concatenate register address and data
-    // For now, not implemented
-    return false;
+    // Allocate buffer for register address (2 bytes) + data
+    uint8_t *buffer = new uint8_t[len + 2];
+    if (buffer == nullptr) {
+        return false;
+    }
+
+    // Set register address (MSB first)
+    buffer[0] = uint8_t(reg >> 8);
+    buffer[1] = uint8_t(reg & 0xFF);
+
+    // Copy data
+    memcpy(&buffer[2], data, len);
+
+    // Transfer
+    bool result = dev->transfer(buffer, len + 2, nullptr, 0);
+
+    // Clean up
+    delete[] buffer;
+
+    return result;
 }
 
 /*
