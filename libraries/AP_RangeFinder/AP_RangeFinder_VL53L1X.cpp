@@ -161,7 +161,7 @@ bool AP_RangeFinder_VL53L1X::init(DistanceMode mode)
           write_register(DSS_CONFIG__ROI_MODE_CONTROL, 2) && // REQUESTED_EFFFECTIVE_SPADS
           read_register16(MM_CONFIG__OUTER_OFFSET_MM, mm_config_outer_offset_mm) &&
           setDistanceMode(mode) &&
-          setMeasurementTimingBudget(40000) &&
+          setMeasurementTimingBudget(33000) &&
           // the API triggers this change in VL53L1_init_and_start_range() once a
           // measurement is started; assumes MM1 and MM2 are disabled
           write_register16(ALGO__PART_TO_PART_RANGE_OFFSET_MM, mm_config_outer_offset_mm * 4) &&
