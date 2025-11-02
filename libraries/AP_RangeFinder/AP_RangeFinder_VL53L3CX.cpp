@@ -326,7 +326,7 @@ bool AP_RangeFinder_VL53L3CX::VL53LX_GetRangingMeasurementData(uint16_t &range_m
 // read - return last value measured by sensor
 bool AP_RangeFinder_VL53L3CX::get_reading(uint16_t &reading_mm)
 {
-    uint8_t data_ready = 0;
+    //uint8_t data_ready = 0;
     uint8_t tries = 10;
 
     while (!dataReady()) {
