@@ -138,50 +138,54 @@ public:
 #endif
         VL53L1X_Short = 28,
         VL53L1X_Medium = 29,
+        VL53L3CX = 30,
+        VL53L3CX_Short = 31,
+        VL53L3CX_Medium = 32,
+        VL53L3CX_Long = 33,
 #if AP_RANGEFINDER_LEDDARVU8_ENABLED
-        LeddarVu8_Serial = 30,
+        LeddarVu8_Serial = 34,
 #endif
 #if AP_RANGEFINDER_HC_SR04_ENABLED
-        HC_SR04 = 31,
+        HC_SR04 = 35,
 #endif
 #if AP_RANGEFINDER_GYUS42V2_ENABLED
-        GYUS42v2 = 32,
+        GYUS42v2 = 36,
 #endif
 #if HAL_MSP_RANGEFINDER_ENABLED
-        MSP = 33,
+        MSP = 37,
 #endif
 #if AP_RANGEFINDER_USD1_CAN_ENABLED
-        USD1_CAN = 34,
+        USD1_CAN = 38,
 #endif
 #if AP_RANGEFINDER_BENEWAKE_CAN_ENABLED
-        Benewake_CAN = 35,
+        Benewake_CAN = 39,
 #endif
 #if AP_RANGEFINDER_TERARANGER_SERIAL_ENABLED
-        TeraRanger_Serial = 36,
+        TeraRanger_Serial = 40,
 #endif
 #if AP_RANGEFINDER_LUA_ENABLED
-        Lua_Scripting = 37,
+        Lua_Scripting = 41,
 #endif
 #if AP_RANGEFINDER_NOOPLOOP_ENABLED
-        NoopLoop_P = 38,
+        NoopLoop_P = 42,
 #endif
 #if AP_RANGEFINDER_TOFSENSEP_CAN_ENABLED
-        TOFSenseP_CAN = 39,
+        TOFSenseP_CAN = 43,
 #endif
 #if AP_RANGEFINDER_NRA24_CAN_ENABLED
-        NRA24_CAN = 40,
+        NRA24_CAN = 44,
 #endif
 #if AP_RANGEFINDER_TOFSENSEF_I2C_ENABLED
-        TOFSenseF_I2C = 41,
+        TOFSenseF_I2C = 45,
 #endif
 #if AP_RANGEFINDER_JRE_SERIAL_ENABLED
-        JRE_Serial = 42,
+        JRE_Serial = 46,
 #endif
 #if AP_RANGEFINDER_AINSTEIN_LR_D1_ENABLED
-        Ainstein_LR_D1 = 43,
+        Ainstein_LR_D1 = 47,
 #endif
 #if AP_RANGEFINDER_RDS02UF_ENABLED
-        RDS02UF = 44,
+        RDS02UF = 48,
 #endif
 #if AP_RANGEFINDER_SIM_ENABLED
         SIM = 100,
