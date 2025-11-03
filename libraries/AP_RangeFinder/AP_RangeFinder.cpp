@@ -71,6 +71,8 @@
 #include <AP_HAL/I2CDevice.h>
 #include <AP_InternalError/AP_InternalError.h>
 
+#include <GCS_MAVLink/GCS.h>
+
 extern const AP_HAL::HAL &hal;
 
 // table of user settable parameters
@@ -382,6 +384,7 @@ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial_instance)
     case Type::VL53L3CX_Short:
     case Type::VL53L3CX_Medium:
     case Type::VL53L3CX_Long:
+            //gcs().send_text(MAV_SEVERITY_NOTICE, "VL53L3X");
             FOREACH_I2C(i) {
 #if AP_RANGEFINDER_VL53L3CX_ENABLED
                 if (_add_backend(AP_RangeFinder_VL53L3CX::detect(state[instance], params[instance],
