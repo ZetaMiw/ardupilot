@@ -39,7 +39,13 @@ void Plane::ekf_check()
     }
 
     // return immediately if motors are not armed, or ekf check is disabled
-    if (!plane.arming.is_armed() || !quadplane.in_vtol_posvel_mode() || (g2.fs_ekf_thresh <= 0.0f)) {
+    bool ekf_check_disabled = !plane.arming.is_armed() || (g2.fs_ekf_thresh <= 0.0f);
+#if HAL_QUADPLANE_ENABLED
+    if (!quadplane.in_vtol_posvel_mode()) {
+        ekf_check_disabled = true;
+    }
+#endif
+    if (ekf_check_disabled) {
         ekf_check_state.fail_count = 0;
         ekf_check_state.bad_variance = false;
         AP_Notify::flags.ekf_bad = ekf_check_state.bad_variance;
@@ -68,7 +74,7 @@ void Plane::ekf_check()
                 // limit count from climbing too high
                 ekf_check_state.fail_count = EKF_CHECK_ITERATIONS_MAX;
                 ekf_check_state.bad_variance = true;
-                AP::logger().Write_Error(LogErrorSubsystem::EKFCHECK, LogErrorCode::EKFCHECK_BAD_VARIANCE);
+                LOGGER_WRITE_ERROR(LogErrorSubsystem::EKFCHECK, LogErrorCode::EKFCHECK_BAD_VARIANCE);
                 // send message to gcs
                 if ((AP_HAL::millis() - ekf_check_state.last_warn_time) > EKF_CHECK_WARNING_TIME) {
                     gcs().send_text(MAV_SEVERITY_CRITICAL,"EKF variance");
@@ -85,7 +91,7 @@ void Plane::ekf_check()
             // if compass is flagged as bad and the counter reaches zero then clear flag
             if (ekf_check_state.bad_variance && ekf_check_state.fail_count == 0) {
                 ekf_check_state.bad_variance = false;
-                AP::logger().Write_Error(LogErrorSubsystem::EKFCHECK, LogErrorCode::EKFCHECK_VARIANCE_CLEARED);
+                LOGGER_WRITE_ERROR(LogErrorSubsystem::EKFCHECK, LogErrorCode::EKFCHECK_VARIANCE_CLEARED);
                 // clear failsafe
                 failsafe_ekf_off_event();
             }
@@ -106,7 +112,7 @@ bool Plane::ekf_over_threshold()
         return false;
     }
 
-    // Get EKF innovations normalised wrt the innovaton test limits.
+    // Get EKF innovations normalised wrt the innovation test limits.
     // A value above 1.0 means the EKF has rejected that sensor data
     float position_variance, vel_variance, height_variance, tas_variance;
     Vector3f mag_variance;
@@ -149,9 +155,10 @@ void Plane::failsafe_ekf_event()
 
     // EKF failsafe event has occurred
     ekf_check_state.failsafe_on = true;
-    AP::logger().Write_Error(LogErrorSubsystem::FAILSAFE_EKFINAV, LogErrorCode::FAILSAFE_OCCURRED);
+    LOGGER_WRITE_ERROR(LogErrorSubsystem::FAILSAFE_EKFINAV, LogErrorCode::FAILSAFE_OCCURRED);
 
-    // if not in a VTOL mode requring position, then nothing needs to be done
+    // if not in a VTOL mode requiring position, then nothing needs to be done
+#if HAL_QUADPLANE_ENABLED
     if (!quadplane.in_vtol_posvel_mode()) {
         return;
     }
@@ -163,6 +170,7 @@ void Plane::failsafe_ekf_event()
         // the pilot is controlling via sticks so fallbacl to QHOVER
         plane.set_mode(mode_qhover, ModeReason::EKF_FAILSAFE);
     }
+#endif
 }
 
 // failsafe_ekf_off_event - actions to take when EKF failsafe is cleared
@@ -174,5 +182,5 @@ void Plane::failsafe_ekf_off_event(void)
     }
 
     ekf_check_state.failsafe_on = false;
-    AP::logger().Write_Error(LogErrorSubsystem::FAILSAFE_EKFINAV, LogErrorCode::FAILSAFE_RESOLVED);
+    LOGGER_WRITE_ERROR(LogErrorSubsystem::FAILSAFE_EKFINAV, LogErrorCode::FAILSAFE_RESOLVED);
 }

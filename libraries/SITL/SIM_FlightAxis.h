@@ -18,7 +18,12 @@
 
 #pragma once
 
-#include <AP_HAL/utility/Socket.h>
+#include <AP_HAL/AP_HAL_Boards.h>
+#include "SIM_config.h"
+
+#if AP_SIM_FLIGHTAXIS_ENABLED
+
+#include <AP_HAL/utility/Socket_native.h>
 
 #include "SIM_Aircraft.h"
 
@@ -31,12 +36,14 @@ class FlightAxis : public Aircraft {
 public:
     FlightAxis(const char *frame_str);
 
+    static const struct AP_Param::GroupInfo var_info[];
+
     /* update model by one time step */
     void update(const struct sitl_input &input) override;
 
     /* static object creator */
     static Aircraft *create(const char *frame_str) {
-        return new FlightAxis(frame_str);
+        return NEW_NOTHROW FlightAxis(frame_str);
     }
 
     struct state {
@@ -163,16 +170,30 @@ private:
 
     void update_loop(void);
     void report_FPS(void);
+    void socket_creator(void);
 
     struct sitl_input last_input;
+
+    AP_Int32 _options;
+
+    enum class Option : uint32_t{
+        ResetPosition = (1U<<0),
+        Rev4Servos    = (1U<<1),
+        HeliDemix     = (1U<<2),
+        SilenceFPS    = (1U<<3),
+    };
+
+    // return true if an option is set
+    bool option_is_set(Option option) const {
+        return (uint32_t(option) & uint32_t(_options)) != 0;
+    }
 
     double average_frame_time_s;
     double extrapolated_s;
     double initial_time_s;
     double last_time_s;
-    bool heli_demix;
-    bool rev4_servos;
     bool controller_started;
+    uint32_t glitch_count;
     uint64_t frame_counter;
     uint64_t activation_frame_counter;
     uint64_t socket_frame_counter;
@@ -183,9 +204,15 @@ private:
 
     const char *controller_ip = "127.0.0.1";
     uint16_t controller_port = 18083;
-    SocketAPM *sock;
+    SocketAPM_native *socknext;
+    SocketAPM_native *sock;
     char replybuf[10000];
+    pid_t socket_pid;
+    uint32_t sock_error_count;
+    double last_recv_sec;
 };
 
 
 } // namespace SITL
+
+#endif // AP_SIM_FLIGHTAXIS_ENABLED

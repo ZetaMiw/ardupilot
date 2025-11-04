@@ -76,7 +76,7 @@ id[7][6] = 28
 id[7][7] = 27
 
 -- ArduPilot logo 7 x 48, RGB
-image = {}
+local image = {}
 image[1] = {}
 image[2] = {}
 image[3] = {}
@@ -500,9 +500,6 @@ local function display_image(image_in,offset_in,brightness_in)
     if brightness_in then
         brightness = brightness_in
     end
-
-    local i
-    local j
 
     for i = 1, 48 do
         local x_index = i + im_offset

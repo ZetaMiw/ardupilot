@@ -29,7 +29,6 @@ STDOUT_BAUDRATE 57600
 
 # order of UARTs
 SERIAL_ORDER
-define HAL_USE_UART FALSE
 
 PA4 LED_BOOTLOADER OUTPUT LOW
 define HAL_LED_ON 1
@@ -55,25 +54,14 @@ define SERIAL_BUFFERS_SIZE 32
 define HAL_USE_EMPTY_IO TRUE
 define PORT_INT_REQUIRED_STACK 64
 
-define HAL_USE_RTC FALSE
-define DISABLE_SERIAL_ESC_COMM TRUE
-define NO_DATAFLASH TRUE
-
 define DMA_RESERVE_SIZE 0
 
-define PERIPH_FW TRUE
 MAIN_STACK 0x800
 PROCESS_STACK 0x800
-define HAL_DISABLE_LOOP_DELAY
-
-define HAL_USE_EMPTY_STORAGE 1
-define HAL_STORAGE_SIZE 16384
 
 # enable CAN support
 PA11 CAN_RX CAN
 PA12 CAN_TX CAN
-define HAL_USE_CAN TRUE
-define STM32_CAN_USE_CAN1 TRUE
 
 # debugger support
 PA13 JTMS-SWDIO SWD
@@ -91,8 +79,6 @@ define HAL_BOOTLOADER_TIMEOUT 1000
 # want to stay in the bootloader
 PB6 STAY_IN_BOOTLOADER INPUT FLOATING
 
-# reserve 256 bytes for comms between app and bootloader
-RAM_RESERVE_START 256
 
 # Add CS pins to ensure they are high in bootloader
 PB0 MAG_CS CS

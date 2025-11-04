@@ -13,18 +13,19 @@ public:
 
     // Auto Pilot Modes enumeration
     enum class Number : uint8_t {
-        MANUAL =        0,  // manual control
-        LAND =          1,  // currently just stops moving
+        LAND =          0,  // currently just stops moving
+        MANUAL =        1,  // manual control
         VELOCITY =      2,  // velocity mode
         LOITER =        3,  // loiter mode (position hold)
+        RTL =           4,  // rtl
+        // Mode number 30 reserved for "offboard" for external/lua control.
     };
 
     // constructor
     Mode(void);
 
     // do not allow copying
-    Mode(const Mode &other) = delete;
-    Mode &operator=(const Mode&) = delete;
+    CLASS_NO_COPY(Mode);
 
     // child classes should override these methods
     virtual bool init(bool ignore_checks)
@@ -51,6 +52,9 @@ public:
     // return a string for this flightmode
     virtual const char *name() const = 0;
     virtual const char *name4() const = 0;
+
+    // returns a unique number specific to this mode
+    virtual Mode::Number number() const = 0;
 
     virtual bool is_landing() const
     {
@@ -84,7 +88,7 @@ public:
     void update_navigation();
 
     // pilot input processing
-    void get_pilot_desired_accelerations(float &right_out, float &front_out) const;
+    void get_pilot_input(Vector3f &pilot, float &yaw);
 
 protected:
 
@@ -105,82 +109,19 @@ protected:
     AP_InertialNav &inertial_nav;
     AP_AHRS &ahrs;
     Fins *&motors;
+    Loiter *&loiter;
     RC_Channel *&channel_right;
     RC_Channel *&channel_front;
-    RC_Channel *&channel_down;
+    RC_Channel *&channel_up;
     RC_Channel *&channel_yaw;
     float &G_Dt;
 
 public:
-    // Navigation Yaw control
-    class AutoYaw
-    {
-
-    public:
-
-        // yaw(): main product of AutoYaw; the heading:
-        float yaw();
-
-        // mode(): current method of determining desired yaw:
-        autopilot_yaw_mode mode() const
-        {
-            return (autopilot_yaw_mode)_mode;
-        }
-        void set_mode_to_default(bool rtl);
-        void set_mode(autopilot_yaw_mode new_mode);
-        autopilot_yaw_mode default_mode(bool rtl) const;
-
-        // rate_cds(): desired yaw rate in centidegrees/second:
-        float rate_cds() const;
-        void set_rate(float new_rate_cds);
-
-        // set_roi(...): set a "look at" location:
-        void set_roi(const Location &roi_location);
-
-        void set_fixed_yaw(float angle_deg,
-                           float turn_rate_dps,
-                           int8_t direction,
-                           bool relative_angle);
-
-    private:
-
-        float look_ahead_yaw();
-        float roi_yaw();
-
-        // auto flight mode's yaw mode
-        uint8_t _mode = AUTO_YAW_LOOK_AT_NEXT_WP;
-
-        // Yaw will point at this location if mode is set to AUTO_YAW_ROI
-        Vector3f roi;
-
-        // bearing from current location to the ROI
-        float _roi_yaw;
-
-        // yaw used for YAW_FIXED yaw_mode
-        int32_t _fixed_yaw;
-
-        // Deg/s we should turn
-        int16_t _fixed_yaw_slewrate;
-
-        // heading when in yaw_look_ahead_yaw
-        float _look_ahead_yaw;
-
-        // turn rate (in cds) when auto_yaw_mode is set to AUTO_YAW_RATE
-        float _rate_cds;
-
-        // used to reduce update rate to 100hz:
-        uint8_t roi_yaw_counter;
-
-    };
-    static AutoYaw auto_yaw;
-
     // pass-through functions to reduce code churn on conversion;
     // these are candidates for moving into the Mode base
     // class.
     bool set_mode(Mode::Number mode, ModeReason reason);
-    void set_land_complete(bool b);
     GCS_Blimp &gcs();
-    void set_throttle_takeoff(void);
 
     // end pass-through functions
 };
@@ -221,6 +162,8 @@ protected:
     {
         return "MANU";
     }
+
+    Mode::Number number() const override { return Mode::Number::MANUAL; }
 
 private:
 
@@ -263,6 +206,8 @@ protected:
     {
         return "VELY";
     }
+
+    Mode::Number number() const override { return Mode::Number::VELOCITY; }
 
 private:
 
@@ -307,10 +252,11 @@ protected:
         return "LOIT";
     }
 
+    Mode::Number number() const override { return Mode::Number::LOITER; }
+
 private:
     Vector3f target_pos;
     float target_yaw;
-    float loop_period;
 };
 
 class ModeLand : public Mode
@@ -350,6 +296,51 @@ protected:
         return "LAND";
     }
 
+    Mode::Number number() const override { return Mode::Number::LAND; }
+
 private:
+
+};
+
+class ModeRTL : public Mode
+{
+
+public:
+    // inherit constructor
+    using Mode::Mode;
+
+    virtual bool init(bool ignore_checks) override;
+    virtual void run() override;
+
+    bool requires_GPS() const override
+    {
+        return true;
+    }
+    bool has_manual_throttle() const override
+    {
+        return false;
+    }
+    bool allows_arming(bool from_gcs) const override
+    {
+        return true;
+    };
+    bool is_autopilot() const override
+    {
+        return false;
+        //TODO
+    }
+
+protected:
+
+    const char *name() const override
+    {
+        return "RTL";
+    }
+    const char *name4() const override
+    {
+        return "RTL";
+    }
+
+    Mode::Number number() const override { return Mode::Number::RTL; }
 
 };

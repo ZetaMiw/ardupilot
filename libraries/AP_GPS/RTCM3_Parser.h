@@ -16,8 +16,12 @@
  RTCMv3 parser, used to support moving baseline RTK mode between two
  GPS modules
 */
-
+#pragma once
 #include <stdint.h>
+
+// maximum packet length with MAVLink GPS_RTCM_DATA is 4*180 as we
+// handle up to 4 fragments
+#define RTCM3_MAX_PACKET_LEN 720
 
 class RTCM3_Parser {
 public:
@@ -39,8 +43,8 @@ public:
 private:
     const uint8_t RTCMv3_PREAMBLE = 0xD3;
 
-    // raw packet, we shouldn't need over 300 bytes for the MB configs we use
-    uint8_t pkt[300];
+    // raw packet, we shouldn't need over 600 bytes for the MB configs we use
+    uint8_t pkt[RTCM3_MAX_PACKET_LEN];
 
     // number of bytes in pkt[]
     uint16_t pkt_bytes;

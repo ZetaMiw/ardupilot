@@ -2,9 +2,12 @@
 /// @brief  Parachute release library
 #pragma once
 
+#include "AP_Parachute_config.h"
+
+#if HAL_PARACHUTE_ENABLED
+
 #include <AP_Param/AP_Param.h>
 #include <AP_Common/AP_Common.h>
-#include <AP_Relay/AP_Relay.h>
 
 #define AP_PARACHUTE_TRIGGER_TYPE_RELAY_0       0
 #define AP_PARACHUTE_TRIGGER_TYPE_RELAY_1       1
@@ -20,14 +23,8 @@
 
 #define AP_PARACHUTE_ALT_MIN_DEFAULT            10     // default min altitude the vehicle should have before parachute is released
 
-#define AP_PARACHUTE_CRITICAL_SINK_DEFAULT      0    // default critical sink speed in m/s to trigger emergency parachute
-
-#ifndef HAL_PARACHUTE_ENABLED
-// default to parachute enabled to match previous configs
-#define HAL_PARACHUTE_ENABLED 1
-#endif
-
-#if HAL_PARACHUTE_ENABLED
+#define AP_PARACHUTE_CRITICAL_SINK_DEFAULT      0      // default critical sink speed in m/s to trigger emergency parachute
+#define AP_PARACHUTE_OPTIONS_DEFAULT            0      // default parachute options: enabled disarm after parachute release
 
 /// @class  AP_Parachute
 /// @brief  Class managing the release of a parachute
@@ -35,8 +32,7 @@ class AP_Parachute {
 
 public:
     /// Constructor
-    AP_Parachute(AP_Relay &relay)
-        : _relay(relay)
+    AP_Parachute()
     {
         // setup parameter defaults
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
@@ -49,8 +45,7 @@ public:
     }
 
     /* Do not allow copies */
-    AP_Parachute(const AP_Parachute &other) = delete;
-    AP_Parachute &operator=(const AP_Parachute&) = delete;
+    CLASS_NO_COPY(AP_Parachute);
 
     /// enabled - enable or disable parachute release
     void enabled(bool on_off);
@@ -86,6 +81,12 @@ public:
     // trigger parachute release if sink_rate is below critical_sink_rate for 1sec
     void check_sink_rate();
 
+    // check settings are valid
+    bool arming_checks(size_t buflen, char *buffer) const;
+
+    // Return the relay index that would be used for param conversion to relay functions
+    bool get_legacy_relay_index(int8_t &index) const;
+
     static const struct AP_Param::GroupInfo        var_info[];
 
     // get singleton instance
@@ -103,13 +104,19 @@ private:
     AP_Float    _critical_sink;      // critical sink rate to trigger emergency parachute
 
     // internal variables
-    AP_Relay   &_relay;         // pointer to relay object from the base class Relay.
     uint32_t    _release_time;  // system time that parachute is ordered to be released (actual release will happen 0.5 seconds later)
     bool        _release_initiated:1;    // true if the parachute release initiated (may still be waiting for engine to be suppressed etc.)
     bool        _release_in_progress:1;  // true if the parachute release is in progress
     bool        _released:1;             // true if the parachute has been released
     bool        _is_flying:1;            // true if the vehicle is flying
     uint32_t    _sink_time_ms;           // system time that the vehicle exceeded critical sink rate
+
+    enum class Options : uint8_t {
+        HoldOpen = (1U<<0),
+        SkipDisarmBeforeParachuteRelease = (1U<<1),
+    };
+
+    AP_Int32    _options;
 };
 
 namespace AP {

@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <AP_Math/AP_Math.h>
 
+extern const AP_HAL::HAL& hal;
+
 using namespace SITL;
 
 // table of user settable parameters
@@ -66,24 +68,24 @@ void Gripper_EPM::update_from_demand()
     const float dt = (now - last_update_us) * 1.0e-6f;
 
     // decay the field
-    field_strength = field_strength * (100.0f - field_decay_rate * dt) / 100.0f;
+    field_strength = field_strength * (100.0f - field_decay_rate * dt) * 0.01f;
 
     // note that "demand" here is just an on/off switch; we only care
     // about which range it falls into
     if (demand > 0.6f) {
         // we are instructed to grip harder
-        field_strength = field_strength + (100.0f - field_strength) * field_strength_slew_rate / 100.0f * dt;
+        field_strength = field_strength + (100.0f - field_strength) * field_strength_slew_rate * 0.01f * dt;
     } else if (demand < 0.4f) {
         // we are instructed to loosen grip
-        field_strength = field_strength * (100.0f - field_degauss_rate * dt) / 100.0f;
+        field_strength = field_strength * (100.0f - field_degauss_rate * dt) * 0.01f;
     } else {
         // neutral; no demanded change
     }
 
     if (should_report()) {
-        ::fprintf(stderr, "demand=%f\n", demand);
-        printf("Field strength: %f%%\n", field_strength);
-        printf("Field strength: %f Tesla\n", tesla());
+        hal.console->printf("demand=%f\n", demand);
+        hal.console->printf("Field strength: %f%%\n", field_strength);
+        hal.console->printf("Field strength: %f Tesla\n", tesla());
         last_report_us = now;
         reported_field_strength = field_strength;
     }
@@ -119,5 +121,5 @@ float Gripper_EPM::tesla() const
     // https://en.wikipedia.org/wiki/Orders_of_magnitude_(magnetic_field)
     // 200N lifting capacity ~= 2.5T
     const float percentage_to_tesla = 0.25f;
-    return static_cast<float>(percentage_to_tesla * field_strength / 100.0f);
+    return static_cast<float>(percentage_to_tesla * field_strength * 0.01f);
 }

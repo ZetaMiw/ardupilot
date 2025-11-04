@@ -96,7 +96,7 @@ static const struct AP_Param::defaults_table_struct defaults_table[] = {
     { "OSD_VSPEED_X",        1.0 },
     { "OSD_VSPEED_Y",        1.0 },
 
-#ifdef HAVE_AP_BLHELI_SUPPORT
+#if HAVE_AP_BLHELI_SUPPORT
     //OSD_ESC_TMP
     { "OSD_BLHTEMP_EN",       1.0 },
     { "OSD_BLHTEMP_X",        1.0 },
@@ -164,14 +164,14 @@ bool AP_OSD_MSP::init(void)
 }
 
 // override built in positions with defaults for MSP OSD
-void AP_OSD_MSP::setup_defaults(void) 
+void AP_OSD_MSP::setup_defaults(void)
 {
     AP_Param::set_defaults_from_table(defaults_table, ARRAY_SIZE(defaults_table));
 }
 
 AP_OSD_Backend *AP_OSD_MSP::probe(AP_OSD &osd)
 {
-    AP_OSD_MSP *backend = new AP_OSD_MSP(osd);
+    AP_OSD_MSP *backend = NEW_NOTHROW AP_OSD_MSP(osd);
     if (!backend) {
         return nullptr;
     }
@@ -180,9 +180,4 @@ AP_OSD_Backend *AP_OSD_MSP::probe(AP_OSD &osd)
         return nullptr;
     }
     return backend;
-}
-
-AP_OSD_MSP::AP_OSD_MSP(AP_OSD &osd):
-    AP_OSD_Backend(osd)
-{
 }

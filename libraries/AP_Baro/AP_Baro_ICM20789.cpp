@@ -13,17 +13,17 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "AP_Baro_ICM20789.h"
+
+#if AP_BARO_ICM20789_ENABLED
+
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/I2CDevice.h>
 #include <utility>
 
 #include <AP_Common/AP_Common.h>
-#include <AP_HAL/AP_HAL.h>
-#include <AP_Math/AP_Math.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
-#include "AP_Baro_ICM20789.h"
 
-#include <utility>
 #include <stdio.h>
 
 #include <AP_Math/AP_Math.h>
@@ -80,7 +80,7 @@ AP_Baro_Backend *AP_Baro_ICM20789::probe(AP_Baro &baro,
     if (!dev || !dev_imu) {
         return nullptr;
     }
-    AP_Baro_ICM20789 *sensor = new AP_Baro_ICM20789(baro, std::move(dev), std::move(dev_imu));
+    AP_Baro_ICM20789 *sensor = NEW_NOTHROW AP_Baro_ICM20789(baro, std::move(dev), std::move(dev_imu));
     if (!sensor || !sensor->init()) {
         delete sensor;
         return nullptr;
@@ -349,7 +349,7 @@ void AP_Baro_ICM20789::update()
 // @Field: Praw: raw pressure from sensor
 // @Field: P: pressure
 // @Field: T: temperature
-    AP::logger().Write("ICMB", "TimeUS,Traw,Praw,P,T", "QIIff",
+    AP::logger().WriteStreaming("ICMB", "TimeUS,Traw,Praw,P,T", "QIIff",
                                            AP_HAL::micros64(),
                                            dd.Traw, dd.Praw, dd.P, dd.T);
 #endif
@@ -363,3 +363,4 @@ void AP_Baro_ICM20789::update()
     }
 }
 
+#endif  // AP_BARO_ICM20789_ENABLED

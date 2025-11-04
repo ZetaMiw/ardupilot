@@ -76,7 +76,7 @@ id[7][6] = 28
 id[7][7] = 27
 
 -- https://github.com/noopkat/oled-font-5x7/blob/master/oled-font-5x7.js
-font = {}
+local font = {}
 font[' '] = {0x00, 0x00, 0x00, 0x00, 0x00} -- // space
 font['!'] = {0x00, 0x00, 0x5F, 0x00, 0x00} -- // !
 font['"'] = {0x00, 0x07, 0x00, 0x07, 0x00} -- // "
@@ -204,9 +204,6 @@ if char_offset < 1 - 5 then
     return
 end
 
-local i
-local j
-
 for i = 1, 5 do
     local x_index = i + char_offset
     if x_index >= 1 and x_index <= matrix_x then
@@ -224,7 +221,6 @@ end
 
 local function display_string(string,r,g,b,offset_in)
 local str_offset = 0
-local i
 for i = 1, string:len() do
     display_char(string:sub(i,i),r,g,b,str_offset + offset_in)
     str_offset = str_offset + 6

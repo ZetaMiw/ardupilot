@@ -9,31 +9,29 @@
 
 #pragma once
 
-#include <AP_AHRS/AP_AHRS.h>
+#include "AP_Soaring_config.h"
+#if HAL_SOARING_ENABLED
+
 #include <AP_Param/AP_Param.h>
 #include <AP_Math/AP_Math.h>
 #include "ExtendedKalmanFilter.h"
 #include "Variometer.h"
-#include <AP_SpdHgtControl/AP_SpdHgtControl.h>
+#include "SpeedToFly.h"
 
-#ifndef HAL_SOARING_ENABLED
- #define HAL_SOARING_ENABLED !HAL_MINIMIZE_FEATURES
-#endif
-
-#if HAL_SOARING_ENABLED
-
-#define INITIAL_THERMAL_STRENGTH 2.0
-#define INITIAL_THERMAL_RADIUS 80.0
-#define INITIAL_STRENGTH_COVARIANCE 0.0049
-#define INITIAL_RADIUS_COVARIANCE 400.0
-#define INITIAL_POSITION_COVARIANCE 400.0
+static constexpr float INITIAL_THERMAL_RADIUS = 80.0;
+static constexpr float INITIAL_STRENGTH_COVARIANCE = 0.0049;
+static constexpr float INITIAL_RADIUS_COVARIANCE = 400.0;
+static constexpr float INITIAL_POSITION_COVARIANCE = 400.0;
 
 
 class SoaringController {
+    Variometer::PolarParams _polarParams;
     ExtendedKalmanFilter _ekf{};
-    AP_SpdHgtControl &_spdHgt;
+    class AP_TECS &_tecs;
     Variometer _vario;
-    const AP_Vehicle::FixedWing &_aparm;
+    SpeedToFly _speedToFly;
+
+    const AP_FixedWing &_aparm;
 
     // store aircraft location at last update
     Vector3f _prev_update_location;
@@ -49,6 +47,11 @@ class SoaringController {
 
     // store time of last update
     uint64_t _prev_update_time;
+
+    // store time of last NVT publish
+#if HAL_SOARING_NVF_EKF_ENABLED
+    uint32_t _prev_nvf_pub_time_ms;
+#endif // #if HAL_SOARING_NVF_EKF_ENABLED
 
     bool _throttle_suppressed;
 
@@ -68,17 +71,17 @@ protected:
     AP_Float thermal_distance_ahead;
     AP_Int16 min_thermal_s;
     AP_Int16 min_cruise_s;
-    AP_Float polar_CD0;
-    AP_Float polar_B;
-    AP_Float polar_K;
     AP_Float alt_max;
     AP_Float alt_min;
     AP_Float alt_cutoff;
     AP_Float max_drift;
     AP_Float thermal_bank;
+    AP_Float soar_thermal_airspeed;
+    AP_Float soar_cruise_airspeed;
+    AP_Float soar_thermal_flap;
 
 public:
-    SoaringController(AP_SpdHgtControl &spdHgt, const AP_Vehicle::FixedWing &parms);
+    SoaringController(class AP_TECS &tecs, const AP_FixedWing &parms);
 
     enum class LoiterStatus {
         DISABLED,
@@ -125,7 +128,7 @@ public:
 
     bool check_drift(Vector2f prev_wp, Vector2f next_wp);
 
-    void update_active_state();
+    void update_active_state(bool override_disable);
 
     bool is_active() const {return _last_update_status>=SoaringController::ActiveStatus::MANUAL_MODE_CHANGE;};
 
@@ -137,13 +140,22 @@ public:
 
     float get_thermalling_radius() const;
 
+    float get_thermalling_target_airspeed();
+
+    float get_cruising_target_airspeed();
+
+    float get_thermalling_flap() const
+    {
+        return soar_thermal_flap;
+    }
+
 private:
 
     ActiveStatus _last_update_status;
 
     ActiveStatus _pilot_desired_state = ActiveStatus::AUTO_MODE_CHANGE;
 
-    ActiveStatus active_state() const;
+    ActiveStatus active_state(bool override_disable) const;
 
     bool _exit_commanded;
 };

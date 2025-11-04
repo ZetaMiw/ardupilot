@@ -1,8 +1,10 @@
+#include "AP_Mount_config.h"
+
+#if HAL_SOLO_GIMBAL_ENABLED
+
 #include <AP_HAL/AP_HAL.h>
 #include <AP_AHRS/AP_AHRS.h>
 #include "SoloGimbal.h"
-
-#if HAL_SOLO_GIMBAL_ENABLED
 
 #include <stdio.h>
 #include <GCS_MAVLink/GCS.h>
@@ -28,7 +30,7 @@ bool SoloGimbal::aligned()
 
 gimbal_mode_t SoloGimbal::get_mode()
 {
-    const AP_AHRS_NavEKF &_ahrs = AP::ahrs_navekf();
+    const auto &_ahrs = AP::ahrs();
 
     if ((_gimbalParams.initialized() && is_zero(_gimbalParams.get_K_rate())) || (_ahrs.get_rotation_body_to_ned().c.z < 0 && !(_lockedToBody || _calibrator.running()))) {
         return GIMBAL_MODE_IDLE;
@@ -245,7 +247,7 @@ void SoloGimbal::update_fast() {
         // single gyro mode - one of the first two gyros are unhealthy or don't exist
         // just read primary gyro
         Vector3f dAng;
-        readVehicleDeltaAngle(ins.get_primary_gyro(), dAng);
+        readVehicleDeltaAngle(ins.get_first_usable_gyro(), dAng);
         _vehicle_delta_angles += dAng;
     }
 }
@@ -281,7 +283,7 @@ Vector3f SoloGimbal::get_ang_vel_dem_yaw(const Quaternion &quatEst)
     float dt = _measurement.delta_time;
     float alpha = dt/(dt+tc);
 
-    const AP_AHRS_NavEKF &_ahrs = AP::ahrs_navekf();
+    const auto &_ahrs = AP::ahrs();
     Matrix3f Tve = _ahrs.get_rotation_body_to_ned();
     Matrix3f Teg;
     quatEst.inverse().rotation_matrix(Teg);
@@ -380,7 +382,7 @@ Vector3f SoloGimbal::get_ang_vel_dem_body_lock()
     joint_rates_to_gimbal_ang_vel(gimbalRateDemVecBodyLock, gimbalRateDemVecBodyLock);
 
     // Add a feedforward term from vehicle gyros
-    const AP_AHRS_NavEKF &_ahrs = AP::ahrs_navekf();
+    const auto &_ahrs = AP::ahrs();
     gimbalRateDemVecBodyLock += Tvg * _ahrs.get_gyro();
 
     return gimbalRateDemVecBodyLock;
@@ -400,6 +402,7 @@ void SoloGimbal::update_target(const Vector3f &newTarget)
     _att_target_euler_rad.x = constrain_float(_att_target_euler_rad.x,radians(-30),radians(30));
 }
 
+#if HAL_LOGGING_ENABLED
 void SoloGimbal::write_logs()
 {
     AP_Logger &logger = AP::logger();
@@ -481,6 +484,7 @@ void SoloGimbal::write_logs()
     _log_del_ang.zero();
     _log_del_vel.zero();
 }
+#endif
 
 bool SoloGimbal::joints_near_limits() const
 {

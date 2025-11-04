@@ -16,6 +16,8 @@
  */
 #include "AP_RangeFinder_Benewake_TFMiniPlus.h"
 
+#if AP_RANGEFINDER_BENEWAKE_TFMINIPLUS_ENABLED
+
 #include <utility>
 
 #include <GCS_MAVLink/GCS.h>
@@ -54,7 +56,7 @@ AP_RangeFinder_Backend *AP_RangeFinder_Benewake_TFMiniPlus::detect(
     }
 
     AP_RangeFinder_Benewake_TFMiniPlus *sensor
-        = new AP_RangeFinder_Benewake_TFMiniPlus(_state, _params, std::move(dev));
+        = NEW_NOTHROW AP_RangeFinder_Benewake_TFMiniPlus(_state, _params, std::move(dev));
 
     if (!sensor || !sensor->init()) {
         delete sensor;
@@ -107,13 +109,13 @@ bool AP_RangeFinder_Benewake_TFMiniPlus::init()
         goto fail;
     }
 
-    hal.console->printf(DRIVER ": found fw version %u.%u.%u\n",
+    DEV_PRINTF(DRIVER ": found fw version %u.%u.%u\n",
                         val[5], val[4], val[3]);
 
     for (i = 0; i < ARRAY_SIZE(cmds); i++) {
         ret = _dev->transfer(cmds[i], cmds[i][1], nullptr, 0);
         if (!ret) {
-            hal.console->printf(DRIVER ": Unable to set configuration register %u\n",
+            DEV_PRINTF(DRIVER ": Unable to set configuration register %u\n",
                                 cmds[i][2]);
             goto fail;
         }
@@ -141,7 +143,7 @@ void AP_RangeFinder_Benewake_TFMiniPlus::update()
     WITH_SEMAPHORE(_sem);
 
     if (accum.count > 0) {
-        state.distance_cm = accum.sum / accum.count;
+        state.distance_m = (accum.sum * 0.01f) / accum.count;
         state.last_reading_ms = AP_HAL::millis();
         accum.sum = 0;
         accum.count = 0;
@@ -167,7 +169,7 @@ void AP_RangeFinder_Benewake_TFMiniPlus::process_raw_measure(le16_t distance_raw
          * value to 0." - force it to the max distance so status is set to OutOfRangeHigh
          * rather than NoData.
          */
-        output_distance_cm = MAX(MAX_DIST_CM, max_distance_cm() + BENEWAKE_OUT_OF_RANGE_ADD_CM);
+        output_distance_cm = MAX(MAX_DIST_CM, max_distance()*100 + BENEWAKE_OUT_OF_RANGE_ADD_CM);
     } else {
         output_distance_cm = constrain_int16(output_distance_cm, MIN_DIST_CM, MAX_DIST_CM);
     }
@@ -219,3 +221,5 @@ void AP_RangeFinder_Benewake_TFMiniPlus::timer()
         accum.count++;
     }
 }
+
+#endif  // AP_RANGEFINDER_BENEWAKE_TFMINIPLUS_ENABLED

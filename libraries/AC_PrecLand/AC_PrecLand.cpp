@@ -1,20 +1,33 @@
-#include <AP_HAL/AP_HAL.h>
-#include <AP_Scheduler/AP_Scheduler.h>
-#include <AP_AHRS/AP_AHRS.h>
+#include "AC_PrecLand_config.h"
+
+#if AC_PRECLAND_ENABLED
+
 #include "AC_PrecLand.h"
+#include <AP_HAL/AP_HAL.h>
+#include <AP_AHRS/AP_AHRS.h>
+
 #include "AC_PrecLand_Backend.h"
 #include "AC_PrecLand_Companion.h"
 #include "AC_PrecLand_IRLock.h"
 #include "AC_PrecLand_SITL_Gazebo.h"
 #include "AC_PrecLand_SITL.h"
-
-#include <AP_AHRS/AP_AHRS.h>
+#include <AP_Logger/AP_Logger.h>
+#include <GCS_MAVLink/GCS.h>
+#include <AP_Vehicle/AP_Vehicle_Type.h>
 
 extern const AP_HAL::HAL& hal;
+
+#if APM_BUILD_TYPE(APM_BUILD_Rover)
+ # define AC_PRECLAND_ORIENT_DEFAULT Rotation::ROTATION_NONE
+#else
+ # define AC_PRECLAND_ORIENT_DEFAULT Rotation::ROTATION_PITCH_270
+#endif
 
 static const uint32_t EKF_INIT_TIME_MS = 2000; // EKF initialisation requires this many milliseconds of good sensor data
 static const uint32_t EKF_INIT_SENSOR_MIN_UPDATE_MS = 500; // Sensor must update within this many ms during EKF init, else init will fail
 static const uint32_t LANDING_TARGET_TIMEOUT_MS = 2000; // Sensor must update within this many ms, else prec landing will be switched off
+static const uint32_t LANDING_TARGET_LOST_TIMEOUT_MS = 180000; // Target will be considered as "lost" if the last known location of the target is more than this many ms ago
+static const float    LANDING_TARGET_LOST_DIST_THRESH_M  = 30; // If the last known location of the landing target is beyond this many meters, then we will consider it lost
 
 const AP_Param::GroupInfo AC_PrecLand::var_info[] = {
     // @Param: ENABLED
@@ -27,7 +40,7 @@ const AP_Param::GroupInfo AC_PrecLand::var_info[] = {
     // @Param: TYPE
     // @DisplayName: Precision Land Type
     // @Description: Precision Land Type
-    // @Values: 0:None, 1:CompanionComputer, 2:IRLock, 3:SITL_Gazebo, 4:SITL
+    // @Values: 0:None, 1:MAVLink, 2:IRLock, 3:SITL_Gazebo, 4:SITL
     // @User: Advanced
     AP_GROUPINFO("TYPE",    1, AC_PrecLand, _type, 0),
 
@@ -114,15 +127,79 @@ const AP_Param::GroupInfo AC_PrecLand::var_info[] = {
     // @RebootRequired: True
     AP_GROUPINFO("LAG", 9, AC_PrecLand, _lag, 0.02f), // 20ms is the old default buffer size (8 frames @ 400hz/2.5ms)
 
+    // @Param: XY_DIST_MAX
+    // @DisplayName: Precision Landing maximum distance to target before descending
+    // @Description: The vehicle will not start descending if the landing target is detected and it is further than this many meters away. Set 0 to always descend.
+    // @Range: 0 10
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("XY_DIST_MAX", 10, AC_PrecLand, _xy_max_dist_desc, 2.5f),
+    // @Param: STRICT
+    // @DisplayName: PrecLand strictness
+    // @Description: How strictly should the vehicle land on the target if target is lost
+    // @Values: 0: Land Vertically (Not strict), 1: Retry Landing(Normal Strictness), 2: Do not land (just Hover) (Very Strict)
+    AP_GROUPINFO("STRICT", 11, AC_PrecLand, _strict, 1),
+
+    // @Param: RET_MAX
+    // @DisplayName: PrecLand Maximum number of retires for a failed landing
+    // @Description: PrecLand Maximum number of retires for a failed landing. Set to zero to disable landing retry.
+    // @Range: 0 10
+    // @Increment: 1
+    AP_GROUPINFO("RET_MAX", 12, AC_PrecLand, _retry_max, 4),
+
+    // @Param: TIMEOUT
+    // @DisplayName: PrecLand retry timeout
+    // @Description: Time for which vehicle continues descend even if target is lost. After this time period, vehicle will attempt a landing retry depending on PLND_STRICT parameter.
+    // @Range: 0 20
+    // @Units: s
+    AP_GROUPINFO("TIMEOUT", 13, AC_PrecLand, _retry_timeout_sec, 4),
+
+    // @Param: RET_BEHAVE
+    // @DisplayName: PrecLand retry behaviour
+    // @Description: Prec Land will do the action selected by this parameter if a retry to a landing is needed
+    // @Values: 0: Go to the last location where landing target was detected, 1: Go towards the approximate location of the detected landing target
+    AP_GROUPINFO("RET_BEHAVE", 14, AC_PrecLand, _retry_behave, 0),
+
+    // @Param: ALT_MIN
+    // @DisplayName: PrecLand minimum alt for retry
+    // @Description: Vehicle will continue landing vertically even if target is lost below this height. This needs a rangefinder to work. Set to zero to disable this.
+    // @Range: 0 5
+    // @Units: m
+    AP_GROUPINFO("ALT_MIN", 15, AC_PrecLand, _sensor_min_alt, 0.75),
+
+    // @Param: ALT_MAX
+    // @DisplayName: PrecLand maximum alt for retry
+    // @Description: Vehicle will continue landing vertically until this height if target is not found. Below this height if landing target is not found, landing retry/failsafe might be attempted. This needs a rangefinder to work. Set to zero to disable this.
+    // @Range: 0 50
+    // @Units: m
+    AP_GROUPINFO("ALT_MAX", 16, AC_PrecLand, _sensor_max_alt, 8),
+
+    // @Param: OPTIONS
+    // @DisplayName: Precision Landing Extra Options
+    // @Description: Precision Landing Extra Options
+    // @Bitmask: 0: Moving Landing Target, 1: Allow Precision Landing after manual reposition, 2: Maintain high speed in final descent
+    // @User: Advanced
+    AP_GROUPINFO("OPTIONS", 17, AC_PrecLand, _options, 0),
+
+    // @Param: ORIENT
+    // @DisplayName: Camera Orientation
+    // @Description: Orientation of camera/sensor on body
+    // @Values: 0:Forward, 4:Back, 25:Down
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO_FRAME("ORIENT", 18, AC_PrecLand, _orient, AC_PRECLAND_ORIENT_DEFAULT, AP_PARAM_FRAME_ROVER),
+
     AP_GROUPEND
 };
 
 // Default constructor.
-// Note that the Vector/Matrix constructors already implicitly zero
-// their values.
-//
 AC_PrecLand::AC_PrecLand()
 {
+    if (_singleton != nullptr) {
+        AP_HAL::panic("AC_PrecLand must be singleton");
+    }
+    _singleton = this;
+
     // set parameters to defaults
     AP_Param::setup_object_defaults(this, var_info);
 }
@@ -136,19 +213,22 @@ void AC_PrecLand::init(uint16_t update_rate_hz)
         return;
     }
 
+    // init as target TARGET_NEVER_SEEN, we will update this later
+    _current_target_state = TargetState::TARGET_NEVER_SEEN;
+
     // default health to false
     _backend = nullptr;
     _backend_state.healthy = false;
 
     // create inertial history buffer
     // constrain lag parameter to be within bounds
-    _lag = constrain_float(_lag, 0.02f, 0.25f);
+    _lag.set(constrain_float(_lag, 0.02f, 0.25f));  // must match LAG parameter range at line 124
 
     // calculate inertial buffer size from lag and minimum of main loop rate and update_rate_hz argument
-    const uint16_t inertial_buffer_size = MAX((uint16_t)roundf(_lag * MIN(update_rate_hz, AP::scheduler().get_loop_rate_hz())), 1);
+    const uint16_t inertial_buffer_size = MAX((uint16_t)roundf(_lag * update_rate_hz), 1);
 
     // instantiate ring buffer to hold inertial history, return on failure so no backends are created
-    _inertial_history = new ObjectArray<inertial_data_frame_s>(inertial_buffer_size);
+    _inertial_history = NEW_NOTHROW ObjectArray<inertial_data_frame_s>(inertial_buffer_size);
     if (_inertial_history == nullptr) {
         return;
     }
@@ -160,19 +240,25 @@ void AC_PrecLand::init(uint16_t update_rate_hz)
         default:
             return;
         // companion computer
+#if AC_PRECLAND_COMPANION_ENABLED
         case Type::COMPANION:
-            _backend = new AC_PrecLand_Companion(*this, _backend_state);
+            _backend = NEW_NOTHROW AC_PrecLand_Companion(*this, _backend_state);
             break;
         // IR Lock
+#endif
+#if AC_PRECLAND_IRLOCK_ENABLED
         case Type::IRLOCK:
-            _backend = new AC_PrecLand_IRLock(*this, _backend_state);
+            _backend = NEW_NOTHROW AC_PrecLand_IRLock(*this, _backend_state);
             break;
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+#endif
+#if AC_PRECLAND_SITL_GAZEBO_ENABLED
         case Type::SITL_GAZEBO:
-            _backend = new AC_PrecLand_SITL_Gazebo(*this, _backend_state);
+            _backend = NEW_NOTHROW AC_PrecLand_SITL_Gazebo(*this, _backend_state);
             break;
+#endif
+#if AC_PRECLAND_SITL_ENABLED
         case Type::SITL:
-            _backend = new AC_PrecLand_SITL(*this, _backend_state);
+            _backend = NEW_NOTHROW AC_PrecLand_SITL(*this, _backend_state);
             break;
 #endif
     }
@@ -181,6 +267,9 @@ void AC_PrecLand::init(uint16_t update_rate_hz)
     if (_backend != nullptr) {
         _backend->init();
     }
+
+    _approach_vector_body.x = 1;
+    _approach_vector_body.rotate(_orient);
 }
 
 // update - give chance to driver to get updates from sensor
@@ -193,7 +282,7 @@ void AC_PrecLand::update(float rangefinder_alt_cm, bool rangefinder_alt_valid)
 
     // append current velocity and attitude correction into history buffer
     struct inertial_data_frame_s inertial_data_newest;
-    const AP_AHRS_NavEKF &_ahrs = AP::ahrs_navekf();
+    const auto &_ahrs = AP::ahrs();
     _ahrs.getCorrectedDeltaVelocityNED(inertial_data_newest.correctedVehicleDeltaVelocityNED, inertial_data_newest.dt);
     inertial_data_newest.Tbn = _ahrs.get_rotation_body_to_ned();
     Vector3f curr_vel;
@@ -209,22 +298,112 @@ void AC_PrecLand::update(float rangefinder_alt_cm, bool rangefinder_alt_valid)
     inertial_data_newest.time_usec = AP_HAL::micros64();
     _inertial_history->push_force(inertial_data_newest);
 
+    const float rangefinder_alt_m = rangefinder_alt_cm*0.01f;  //cm to meter
+
     // update estimator of target position
     if (_backend != nullptr && _enabled) {
         _backend->update();
-        run_estimator(rangefinder_alt_cm*0.01f, rangefinder_alt_valid);
+        run_estimator(rangefinder_alt_m, rangefinder_alt_valid);
     }
 
+    // check the status of the landing target location
+    check_target_status(rangefinder_alt_m, rangefinder_alt_valid);
+
+#if HAL_LOGGING_ENABLED
     const uint32_t now = AP_HAL::millis();
-    if (now - last_log_ms > 40) {  // 25Hz
-        last_log_ms = now;
+    if (now - _last_log_ms > 40) {  // 25Hz
+        _last_log_ms = now;
         Write_Precland();
     }
+#endif
+}
+
+// check the status of the target
+void AC_PrecLand::check_target_status(float rangefinder_alt_m, bool rangefinder_alt_valid)
+{
+    if (target_acquired()) {
+        // target in sight
+        _current_target_state = TargetState::TARGET_FOUND;
+        // early return because we already know the status
+        return;
+    }
+
+    // target not in sight
+    if (_current_target_state == TargetState::TARGET_FOUND ||
+               _current_target_state == TargetState::TARGET_RECENTLY_LOST) {
+        // we had target in sight, but not any more, i.e we have lost the target
+        _current_target_state = TargetState::TARGET_RECENTLY_LOST;
+    } else {
+        // we never had the target in sight
+        _current_target_state = TargetState::TARGET_NEVER_SEEN;
+    }
+
+    // We definitely do not have the target in sight
+    // check if the precision landing sensor is supposed to be in range
+    // this needs a valid rangefinder to work
+    if (!check_if_sensor_in_range(rangefinder_alt_m, rangefinder_alt_valid)) {
+        // Target is not in range (vehicle is either too high or too low). Vehicle will not be attempting any sort of landing retries during this period
+        _current_target_state = TargetState::TARGET_OUT_OF_RANGE;
+        return;
+    }
+
+    if (_current_target_state == TargetState::TARGET_RECENTLY_LOST) {
+        // check if it's nearby/found recently, else the status will be demoted to "TARGET_LOST"
+        Vector2f curr_pos;
+        if (AP::ahrs().get_relative_position_NE_origin(curr_pos)) {
+            const float dist_to_last_target_loc_xy = (curr_pos - Vector2f{_last_target_pos_rel_origin_NED.x, _last_target_pos_rel_origin_NED.y}).length();
+            const float dist_to_last_loc_xy = (curr_pos - Vector2f{_last_vehicle_pos_NED.x, _last_vehicle_pos_NED.y}).length();
+            if ((AP_HAL::millis() - _last_valid_target_ms) > LANDING_TARGET_LOST_TIMEOUT_MS) {
+                // the target has not been seen for a long time
+                // might as well consider it as "never seen"
+                _current_target_state = TargetState::TARGET_NEVER_SEEN;
+                return;
+            }
+
+            if ((dist_to_last_target_loc_xy > LANDING_TARGET_LOST_DIST_THRESH_M) || (dist_to_last_loc_xy > LANDING_TARGET_LOST_DIST_THRESH_M)) {
+                // the last known location of target is too far away
+                _current_target_state = TargetState::TARGET_NEVER_SEEN;
+                return;
+            }
+        }
+    }
+}
+
+// Check if the landing target is supposed to be in sight based on the height of the vehicle from the ground
+// This needs a valid rangefinder to work, if the min/max parameters are non zero
+bool AC_PrecLand::check_if_sensor_in_range(float rangefinder_alt_m, bool rangefinder_alt_valid) const
+{
+    if (is_zero(_sensor_max_alt) && is_zero(_sensor_min_alt)) {
+        // no sensor limits have been specified, assume sensor is always in range
+        return true;
+    }
+
+    if (!rangefinder_alt_valid) {
+        // rangefinder isn't healthy. We might be at a very high altitude
+        return false;
+    }
+
+    if (rangefinder_alt_m > _sensor_max_alt && !is_zero(_sensor_max_alt)) {
+        // this prevents triggering a retry when we are too far away from the target
+        return false;
+    }
+
+    if (rangefinder_alt_m < _sensor_min_alt && !is_zero(_sensor_min_alt)) {
+        // this prevents triggering a retry when we are very close to the target
+        return false;
+    }
+
+    // target should be in range
+    return true;
 }
 
 bool AC_PrecLand::target_acquired()
 {
     if ((AP_HAL::millis()-_last_update_ms) > LANDING_TARGET_TIMEOUT_MS) {
+        if (_target_acquired) {
+            // just lost the landing target, inform the user. This message will only be sent once every time target is lost
+            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "PrecLand: Target Lost");
+        }
         // not had a sensor update since a long time
         // probably lost the target
         _estimator_initialized = false;
@@ -243,7 +422,7 @@ bool AC_PrecLand::get_target_position_cm(Vector2f& ret)
         return false;
     }
     ret.x = (_target_pos_rel_out_NE.x + curr_pos.x) * 100.0f;   // m to cm
-    ret.y = (_target_pos_rel_out_NE.y  + curr_pos.y) * 100.0f;  // m to cm
+    ret.y = (_target_pos_rel_out_NE.y + curr_pos.y) * 100.0f;   // m to cm
     return true;
 }
 
@@ -271,6 +450,31 @@ bool AC_PrecLand::get_target_velocity_relative_cms(Vector2f& ret)
     return true;
 }
 
+// get the absolute velocity of the vehicle
+void AC_PrecLand::get_target_velocity_cms(const Vector2f& vehicle_velocity_cms, Vector2f& target_vel_cms)
+{
+    if (!(_options & PLND_OPTION_MOVING_TARGET)) {
+        // the target should not be moving
+        target_vel_cms.zero();
+        return;
+    }
+    if ((EstimatorType)_estimator_type.get() == EstimatorType::RAW_SENSOR) {
+        // We do not predict the velocity of the target in this case
+        // assume velocity to be zero
+        target_vel_cms.zero();
+        return;
+    }
+    Vector2f target_vel_rel_cms;
+    if (!get_target_velocity_relative_cms(target_vel_rel_cms)) {
+        // Don't know where the target is
+        // assume velocity to be zero
+        target_vel_cms.zero();
+        return;
+    }
+    // return the absolute velocity
+    target_vel_cms  = target_vel_rel_cms + vehicle_velocity_cms;
+}
+
 // handle_msg - Process a LANDING_TARGET mavlink message
 void AC_PrecLand::handle_msg(const mavlink_landing_target_t &packet, uint32_t timestamp_ms)
 {
@@ -286,7 +490,7 @@ void AC_PrecLand::handle_msg(const mavlink_landing_target_t &packet, uint32_t ti
 
 void AC_PrecLand::run_estimator(float rangefinder_alt_m, bool rangefinder_alt_valid)
 {
-    const struct inertial_data_frame_s *inertial_data_delayed = (*_inertial_history)[0];
+    _inertial_data_delayed = (*_inertial_history)[0];
 
     switch ((EstimatorType)_estimator_type.get()) {
         case EstimatorType::RAW_SENSOR: {
@@ -301,18 +505,22 @@ void AC_PrecLand::run_estimator(float rangefinder_alt_m, bool rangefinder_alt_va
 
             // Predict
             if (target_acquired()) {
-                _target_pos_rel_est_NE.x -= inertial_data_delayed->inertialNavVelocity.x * inertial_data_delayed->dt;
-                _target_pos_rel_est_NE.y -= inertial_data_delayed->inertialNavVelocity.y * inertial_data_delayed->dt;
-                _target_vel_rel_est_NE.x = -inertial_data_delayed->inertialNavVelocity.x;
-                _target_vel_rel_est_NE.y = -inertial_data_delayed->inertialNavVelocity.y;
+                _target_pos_rel_est_NE.x -= _inertial_data_delayed->inertialNavVelocity.x * _inertial_data_delayed->dt;
+                _target_pos_rel_est_NE.y -= _inertial_data_delayed->inertialNavVelocity.y * _inertial_data_delayed->dt;
+                _target_vel_rel_est_NE.x = -_inertial_data_delayed->inertialNavVelocity.x;
+                _target_vel_rel_est_NE.y = -_inertial_data_delayed->inertialNavVelocity.y;
             }
 
             // Update if a new Line-Of-Sight measurement is available
             if (construct_pos_meas_using_rangefinder(rangefinder_alt_m, rangefinder_alt_valid)) {
+                if (!_estimator_initialized) {
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "PrecLand: Target Found");
+                    _estimator_initialized = true;
+                }
                 _target_pos_rel_est_NE.x = _target_pos_rel_meas_NED.x;
                 _target_pos_rel_est_NE.y = _target_pos_rel_meas_NED.y;
-                _target_vel_rel_est_NE.x = -inertial_data_delayed->inertialNavVelocity.x;
-                _target_vel_rel_est_NE.y = -inertial_data_delayed->inertialNavVelocity.y;
+                _target_vel_rel_est_NE.x = -_inertial_data_delayed->inertialNavVelocity.x;
+                _target_vel_rel_est_NE.y = -_inertial_data_delayed->inertialNavVelocity.y;
 
                 _last_update_ms = AP_HAL::millis();
                 _target_acquired = true;
@@ -326,9 +534,9 @@ void AC_PrecLand::run_estimator(float rangefinder_alt_m, bool rangefinder_alt_va
         }
         case EstimatorType::KALMAN_FILTER: {
             // Predict
-            if (target_acquired()) {
-                const float& dt = inertial_data_delayed->dt;
-                const Vector3f& vehicleDelVel = inertial_data_delayed->correctedVehicleDeltaVelocityNED;
+            if (target_acquired() || _estimator_initialized) {
+                const float& dt = _inertial_data_delayed->dt;
+                const Vector3f& vehicleDelVel = _inertial_data_delayed->correctedVehicleDeltaVelocityNED;
 
                 _ekf_x.predict(dt, -vehicleDelVel.x, _accel_noise*dt);
                 _ekf_y.predict(dt, -vehicleDelVel.y, _accel_noise*dt);
@@ -338,11 +546,13 @@ void AC_PrecLand::run_estimator(float rangefinder_alt_m, bool rangefinder_alt_va
             if (construct_pos_meas_using_rangefinder(rangefinder_alt_m, rangefinder_alt_valid)) {
                 float xy_pos_var = sq(_target_pos_rel_meas_NED.z*(0.01f + 0.01f*AP::ahrs().get_gyro().length()) + 0.02f);
                 if (!_estimator_initialized) {
+                    // Inform the user landing target has been found
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "PrecLand: Target Found");
                     // start init of EKF. We will let the filter consume the data for a while before it available for consumption
                     // reset filter state
-                    if (inertial_data_delayed->inertialNavVelocityValid) {
-                        _ekf_x.init(_target_pos_rel_meas_NED.x, xy_pos_var, -inertial_data_delayed->inertialNavVelocity.x, sq(2.0f));
-                        _ekf_y.init(_target_pos_rel_meas_NED.y, xy_pos_var, -inertial_data_delayed->inertialNavVelocity.y, sq(2.0f));
+                    if (_inertial_data_delayed->inertialNavVelocityValid) {
+                        _ekf_x.init(_target_pos_rel_meas_NED.x, xy_pos_var, -_inertial_data_delayed->inertialNavVelocity.x, sq(2.0f));
+                        _ekf_y.init(_target_pos_rel_meas_NED.y, xy_pos_var, -_inertial_data_delayed->inertialNavVelocity.y, sq(2.0f));
                     } else {
                         _ekf_x.init(_target_pos_rel_meas_NED.x, xy_pos_var, 0.0f, sq(10.0f));
                         _ekf_y.init(_target_pos_rel_meas_NED.y, xy_pos_var, 0.0f, sq(10.0f));
@@ -393,63 +603,88 @@ void AC_PrecLand::check_ekf_init_timeout()
         if (AP_HAL::millis()-_last_update_ms > EKF_INIT_SENSOR_MIN_UPDATE_MS) {
             // we have lost the target, not enough readings to initialize the EKF
             _estimator_initialized = false;
+            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "PrecLand: Init Failed");
         } else if (AP_HAL::millis()-_estimator_init_ms > EKF_INIT_TIME_MS) {
             // the target has been visible for a while, EKF should now have initialized to a good value
             _target_acquired = true;
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "PrecLand: Init Complete");
         }
     }
 }
 
 bool AC_PrecLand::retrieve_los_meas(Vector3f& target_vec_unit_body)
 {
-    if (_backend->have_los_meas() && _backend->los_meas_time_ms() != _last_backend_los_meas_ms) {
-        _last_backend_los_meas_ms = _backend->los_meas_time_ms();
-        _backend->get_los_body(target_vec_unit_body);
+    const uint32_t los_meas_time_ms = _backend->los_meas_time_ms();
+    if (los_meas_time_ms != _last_backend_los_meas_ms && _backend->get_los_body(target_vec_unit_body)) {
+        _last_backend_los_meas_ms = los_meas_time_ms;
         if (!is_zero(_yaw_align)) {
             // Apply sensor yaw alignment rotation
             target_vec_unit_body.rotate_xy(radians(_yaw_align*0.01f));
         }
+
+
+        // rotate vector based on sensor orientation to get correct body frame vector
+        if (_orient != ROTATION_PITCH_270) {
+            // by default, the vector is constructed downwards in body frame
+            // hence, we do not do any rotation if the orientation is downwards
+            // if it is some other orientation, we first bring the vector to forward
+            // and then we rotate it to desired orientation
+            // because the rotations are measured with respect to a vector pointing towards front in body frame
+            // for eg, if orientation is back, i.e., ROTATION_YAW_180, 
+            // the vector is first brought to front and then rotation by YAW 180 to take it to the back of vehicle
+            target_vec_unit_body.rotate(ROTATION_PITCH_90); // bring vector to front
+            target_vec_unit_body.rotate(_orient);           // rotate it to desired orientation
+        }
+
         return true;
-    } else {
-        return false;
     }
+    return false;
 }
 
 bool AC_PrecLand::construct_pos_meas_using_rangefinder(float rangefinder_alt_m, bool rangefinder_alt_valid)
 {
     Vector3f target_vec_unit_body;
     if (retrieve_los_meas(target_vec_unit_body)) {
-        const struct inertial_data_frame_s *inertial_data_delayed = (*_inertial_history)[0];
+        _inertial_data_delayed = (*_inertial_history)[0];
 
-        const Vector3f target_vec_unit_ned = inertial_data_delayed->Tbn * target_vec_unit_body;
-        const bool target_vec_valid = target_vec_unit_ned.z > 0.0f;
+        const bool target_vec_valid = target_vec_unit_body.projected(_approach_vector_body).dot(_approach_vector_body) > 0.0f;
+        const Vector3f target_vec_unit_ned = _inertial_data_delayed->Tbn * target_vec_unit_body;
+        const Vector3f approach_vector_NED = _inertial_data_delayed->Tbn * _approach_vector_body;
         const bool alt_valid = (rangefinder_alt_valid && rangefinder_alt_m > 0.0f) || (_backend->distance_to_target() > 0.0f);
         if (target_vec_valid && alt_valid) {
-            float dist, alt;
+            // distance to target and distance to target along approach vector
+            float dist_to_target, dist_to_target_along_av;
             // figure out ned camera orientation w.r.t its offset
             Vector3f cam_pos_ned;
             if (!_cam_offset.get().is_zero()) {
                 // user has specifed offset for camera
                 // take its height into account while calculating distance
-                cam_pos_ned = inertial_data_delayed->Tbn * _cam_offset;
+                cam_pos_ned = _inertial_data_delayed->Tbn * _cam_offset;
             }
             if (_backend->distance_to_target() > 0.0f) {
                 // sensor has provided distance to landing target
-                dist = _backend->distance_to_target();
-                alt = dist * target_vec_unit_ned.z;
+                dist_to_target = _backend->distance_to_target();
             } else {
                 // sensor only knows the horizontal location of the landing target
                 // rely on rangefinder for the vertical target
-                alt = MAX(rangefinder_alt_m - cam_pos_ned.z, 0.0f);
-                dist = alt / target_vec_unit_ned.z;
+                dist_to_target_along_av = MAX(rangefinder_alt_m - cam_pos_ned.projected(approach_vector_NED).length(), 0.0f);
+                dist_to_target = dist_to_target_along_av / target_vec_unit_ned.projected(approach_vector_NED).length();
             }
 
             // Compute camera position relative to IMU
-            const Vector3f accel_pos_ned = inertial_data_delayed->Tbn * AP::ins().get_imu_pos_offset(AP::ahrs().get_primary_accel_index());
+            const Vector3f accel_pos_ned = _inertial_data_delayed->Tbn * AP::ins().get_imu_pos_offset(AP::ahrs().get_primary_accel_index());
             const Vector3f cam_pos_ned_rel_imu = cam_pos_ned - accel_pos_ned;
 
             // Compute target position relative to IMU
-            _target_pos_rel_meas_NED = Vector3f{target_vec_unit_ned.x*dist, target_vec_unit_ned.y*dist, alt} + cam_pos_ned_rel_imu;
+            _target_pos_rel_meas_NED = (target_vec_unit_ned * dist_to_target) + cam_pos_ned_rel_imu;
+
+            // store the current relative down position so that if we need to retry landing, we know at this height landing target can be found
+            const AP_AHRS &_ahrs = AP::ahrs();
+            Vector3f pos_NED;
+            if (_ahrs.get_relative_position_NED_origin(pos_NED)) {
+                _last_target_pos_rel_origin_NED.z = pos_NED.z;
+                _last_vehicle_pos_NED = pos_NED;
+            }
             return true;
         }
     }
@@ -481,7 +716,7 @@ void AC_PrecLand::run_output_prediction()
     _target_pos_rel_out_NE.y += imu_pos_ned.y;
 
     // Apply position correction for body-frame horizontal camera offset from CG, so that vehicle lands lens-to-target
-    Vector3f cam_pos_horizontal_ned = Tbn * Vector3f(_cam_offset.get().x, _cam_offset.get().y, 0);
+    Vector3f cam_pos_horizontal_ned = Tbn * Vector3f{_cam_offset.get().x, _cam_offset.get().y, 0};
     _target_pos_rel_out_NE.x -= cam_pos_horizontal_ned.x;
     _target_pos_rel_out_NE.y -= cam_pos_horizontal_ned.y;
 
@@ -490,12 +725,64 @@ void AC_PrecLand::run_output_prediction()
     _target_vel_rel_out_NE.x -= vel_ned_rel_imu.x;
     _target_vel_rel_out_NE.y -= vel_ned_rel_imu.y;
 
+    // remember vehicle velocity
+    UNUSED_RESULT(_ahrs.get_velocity_NED(_last_veh_velocity_NED_ms));
+
     // Apply land offset
-    Vector3f land_ofs_ned_m = _ahrs.get_rotation_body_to_ned() * Vector3f(_land_ofs_cm_x,_land_ofs_cm_y,0) * 0.01f;
+    Vector3f land_ofs_ned_m = _ahrs.get_rotation_body_to_ned() * Vector3f{_land_ofs_cm_x, _land_ofs_cm_y, 0} * 0.01f;
     _target_pos_rel_out_NE.x += land_ofs_ned_m.x;
     _target_pos_rel_out_NE.y += land_ofs_ned_m.y;
+
+    // store the landing target as a offset from current position. This is used in landing retry
+    Vector2f last_target_loc_rel_origin_2d;
+    get_target_position_cm(last_target_loc_rel_origin_2d);
+    _last_target_pos_rel_origin_NED.x = last_target_loc_rel_origin_2d.x * 0.01f;
+    _last_target_pos_rel_origin_NED.y = last_target_loc_rel_origin_2d.y * 0.01f;
+
+    // record the last time there was a target output
+    _last_valid_target_ms = AP_HAL::millis();
 }
 
+/*
+  get target location lat/lon. Note that altitude in returned
+  location is not reliable
+ */
+bool AC_PrecLand::get_target_location(Location &loc)
+{
+    if (!target_acquired()) {
+        return false;
+    }
+    if (!AP::ahrs().get_origin(loc)) {
+        return false;
+    }
+    loc.offset(_last_target_pos_rel_origin_NED.x, _last_target_pos_rel_origin_NED.y);
+    loc.alt -= _last_target_pos_rel_origin_NED.z*100;
+    return true;
+}
+
+/*
+  get the absolute velocity of the target in m/s.
+  return false if we cannot estimate target velocity or if the target is not acquired
+*/
+bool AC_PrecLand::get_target_velocity(Vector2f& target_vel)
+{
+    if (!(_options & PLND_OPTION_MOVING_TARGET)) {
+        // the target should not be moving
+        return false;
+    }
+    if ((EstimatorType)_estimator_type.get() == EstimatorType::RAW_SENSOR) {
+        return false;
+    }
+    Vector2f target_vel_rel_cms;
+    if (!get_target_velocity_relative_cms(target_vel_rel_cms)) {
+        return false;
+    }
+    // return the absolute velocity
+    target_vel = (target_vel_rel_cms*0.01) + _last_veh_velocity_NED_ms.xy();
+    return true;
+}
+
+#if HAL_LOGGING_ENABLED
 // Write a precision landing entry
 void AC_PrecLand::Write_Precland()
 {
@@ -529,4 +816,18 @@ void AC_PrecLand::Write_Precland()
     };
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
 }
+#endif
 
+// singleton instance
+AC_PrecLand *AC_PrecLand::_singleton;
+
+namespace AP {
+
+AC_PrecLand *ac_precland()
+{
+    return AC_PrecLand::get_singleton();
+}
+
+}
+
+#endif // AC_PRECLAND_ENABLED

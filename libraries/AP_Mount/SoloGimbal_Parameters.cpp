@@ -1,5 +1,8 @@
-#include "SoloGimbal_Parameters.h"
+#include "AP_Mount_config.h"
+
 #if HAL_SOLO_GIMBAL_ENABLED
+
+#include "SoloGimbal_Parameters.h"
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
@@ -162,7 +165,7 @@ void SoloGimbal_Parameters::update()
     for(uint8_t i=0; i<MAVLINK_GIMBAL_NUM_TRACKED_PARAMS; i++) {
         if (!_params[i].seen && _params[i].fetch_attempts > _max_fetch_attempts) {
             _params[i].state = GMB_PARAMSTATE_NONEXISTANT;
-            hal.console->printf("Gimbal parameter %s timed out\n", get_param_name((gmb_param_t)i));
+            DEV_PRINTF("Gimbal parameter %s timed out\n", get_param_name((gmb_param_t)i));
         }
     }
 
@@ -187,10 +190,12 @@ void SoloGimbal_Parameters::handle_param_value(const mavlink_message_t &msg)
     mavlink_param_value_t packet;
     mavlink_msg_param_value_decode(&msg, &packet);
 
+#if HAL_LOGGING_ENABLED
     AP_Logger *logger = AP_Logger::get_singleton();
     if (logger != nullptr) {
         logger->Write_Parameter(packet.param_id, packet.param_value);
     }
+#endif
 
     for(uint8_t i=0; i<MAVLINK_GIMBAL_NUM_TRACKED_PARAMS; i++) {
         if (!strcmp(packet.param_id, get_param_name((gmb_param_t)i))) {

@@ -17,36 +17,34 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <GCS_MAVLink/GCS_config.h>
+#include <AP_Logger/AP_Logger_config.h>
+
+#if HAL_LOGGING_ENABLED && HAL_GCS_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h> // for LOG_ENTRY
 
-#ifndef HAL_NO_GCS
-
 extern const AP_HAL::HAL& hal;
-
-// We avoid doing log messages when timing is critical:
-bool AP_Logger::should_handle_log_message() const
-{
-    if (!WritesEnabled()) {
-        // this is currently used as a proxy for "in_mavlink_delay"
-        return false;
-    }
-    if (vehicle_is_armed()) {
-        return false;
-    }
-    return true;
-}
 
 /**
    handle all types of log download requests from the GCS
  */
 void AP_Logger::handle_log_message(GCS_MAVLINK &link, const mavlink_message_t &msg)
 {
-    if (!should_handle_log_message()) {
+    if (!WritesEnabled()) {
+        // this is currently used as a proxy for "in_mavlink_delay"
         return;
     }
+    if (vehicle_is_armed()) {
+        if (!_warned_log_disarm) {
+            link.send_text(MAV_SEVERITY_ERROR, "Disarm for log download");
+            _warned_log_disarm = true;
+        }
+        return;
+    }
+    _warned_log_disarm = false;
     _last_mavlink_log_transfer_message_handled_ms = AP_HAL::millis();
     switch (msg.msgid) {
     case MAVLINK_MSG_ID_LOG_REQUEST_LIST:
@@ -130,7 +128,7 @@ void AP_Logger::handle_log_request_data(GCS_MAVLINK &link, const mavlink_message
         uint16_t num_logs = get_num_logs();
         if (packet.id > num_logs || packet.id < 1) {
             // request for an invalid log; cancel any current download
-            transfer_activity = TransferActivity::IDLE;
+            end_log_transfer();
             return;
         }
 
@@ -176,11 +174,16 @@ void AP_Logger::handle_log_request_erase(GCS_MAVLINK &link, const mavlink_messag
 void AP_Logger::handle_log_request_end(GCS_MAVLINK &link, const mavlink_message_t &msg)
 {
     WITH_SEMAPHORE(_log_send_sem);
-    mavlink_log_request_end_t packet;
-    mavlink_msg_log_request_end_decode(&msg, &packet);
+    // mavlink_log_request_end_t packet;
+    // mavlink_msg_log_request_end_decode(&msg, &packet);
+    end_log_transfer();
+}
 
+void AP_Logger::end_log_transfer()
+{
     transfer_activity = TransferActivity::IDLE;
     _log_sending_link = nullptr;
+    backends[0]->end_log_transfer();
 }
 
 /**
@@ -325,10 +328,9 @@ bool AP_Logger::handle_log_send_data()
     _log_data_offset += nbytes;
     _log_data_remaining -= nbytes;
     if (nbytes < MAVLINK_MSG_LOG_DATA_FIELD_DATA_LEN || _log_data_remaining == 0) {
-        transfer_activity = TransferActivity::IDLE;
-        _log_sending_link = nullptr;
+        end_log_transfer();
     }
     return true;
 }
 
-#endif
+#endif  // HAL_LOGGING_ENABLED && HAL_GCS_ENABLED

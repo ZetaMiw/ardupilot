@@ -14,6 +14,10 @@
  */
 #pragma once
 
+#include "AP_WindVane_config.h"
+
+#if AP_WINDVANE_AIRSPEED_ENABLED
+
 #include "AP_WindVane_Backend.h"
 
 #include <AP_Airspeed/AP_Airspeed.h>
@@ -22,8 +26,10 @@ class AP_WindVane_Airspeed : public AP_WindVane_Backend
 {
 public:
     // constructor
-    AP_WindVane_Airspeed(AP_WindVane &frontend);
+    using AP_WindVane_Backend::AP_WindVane_Backend;
 
     // update state
     void update_speed() override;
 };
+
+#endif  // AP_WINDVANE_AIRSPEED_ENABLED

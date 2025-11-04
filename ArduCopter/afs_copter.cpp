@@ -4,13 +4,7 @@
 
 #include "Copter.h"
 
-#if ADVANCED_FAILSAFE == ENABLED
-
-// Constructor
-AP_AdvancedFailsafe_Copter::AP_AdvancedFailsafe_Copter(AP_Mission &_mission) :
-    AP_AdvancedFailsafe(_mission)
-{}
-
+#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
 
 /*
   setup radio_out values for all channels to termination values
@@ -51,7 +45,7 @@ void AP_AdvancedFailsafe_Copter::setup_IO_failsafe(void)
 
 #if FRAME_CONFIG != HELI_FRAME
     // setup AP_Motors outputs for failsafe
-    uint16_t mask = copter.motors->get_motor_mask();
+    uint32_t mask = copter.motors->get_motor_mask();
     hal.rcout->set_failsafe_pwm(mask, copter.motors->get_pwm_output_min());
 #endif
 }
@@ -61,16 +55,12 @@ void AP_AdvancedFailsafe_Copter::setup_IO_failsafe(void)
  */
 AP_AdvancedFailsafe::control_mode AP_AdvancedFailsafe_Copter::afs_mode(void)
 {
-    switch (copter.flightmode->mode_number()) {
-    case Mode::Number::AUTO:
-    case Mode::Number::GUIDED:
-    case Mode::Number::RTL:
-    case Mode::Number::LAND:
-        return AP_AdvancedFailsafe::AFS_AUTO;
-    default:
-        break;
-    }
-    return AP_AdvancedFailsafe::AFS_STABILIZED;
+    return copter.flightmode->afs_mode();
 }
 
-#endif // ADVANCED_FAILSAFE
+//to force entering auto mode when datalink loss 
+ void AP_AdvancedFailsafe_Copter::set_mode_auto(void)
+ {
+    copter.set_mode(Mode::Number::AUTO,ModeReason::GCS_FAILSAFE);
+ }
+#endif // AP_COPTER_ADVANCED_FAILSAFE_ENABLED

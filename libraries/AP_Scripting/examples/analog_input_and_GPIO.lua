@@ -2,11 +2,15 @@
 
 -- for these examples BRD_PWM_COUNT must be 0
 
+---@diagnostic disable: need-check-nil
+
 -- load the analog pin, there are only 16 of these available
 -- some are used by the main AP code, ie battery monitors
 -- assign them like this in the init, not in the main loop
 local analog_in = analog:channel()
-analog_in:set_pin(13) -- typically 13 is the battery input
+if not analog_in:set_pin(13) then -- typically 13 is the battery input
+  gcs:send_text(0, "Invalid analog pin")
+end
 
 -- load a input pwm pin
 local pwm_in = PWMSource()

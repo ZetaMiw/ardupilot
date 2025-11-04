@@ -4,15 +4,18 @@
 
 #pragma once
 
-#include <AP_HAL/AP_HAL.h>
+#include <AP_HAL/AP_HAL_Boards.h>
 
-#define QAUTOTUNE_ENABLED !HAL_MINIMIZE_FEATURES
+#include "quadplane.h"
+#ifndef QAUTOTUNE_ENABLED
+#define QAUTOTUNE_ENABLED (HAL_QUADPLANE_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_SITL)
+#endif
 
 #if QAUTOTUNE_ENABLED
 
-#include <AC_AutoTune/AC_AutoTune.h>
+#include <AC_AutoTune/AC_AutoTune_Multi.h>
 
-class QAutoTune : public AC_AutoTune
+class QAutoTune : public AC_AutoTune_Multi
 {
 public:
     friend class QuadPlane;
@@ -23,7 +26,9 @@ protected:
     float get_pilot_desired_climb_rate_cms(void) const override;
     void get_pilot_desired_rp_yrate_cd(float &roll_cd, float &pitch_cd, float &yaw_rate_cds) override;
     void init_z_limits() override;
+#if HAL_LOGGING_ENABLED
     void log_pids() override;
+#endif
 };
 
 #endif // QAUTOTUNE_ENABLED

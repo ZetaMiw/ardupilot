@@ -1,6 +1,6 @@
 #include "Copter.h"
 
-#if MODE_ACRO_ENABLED == ENABLED
+#if MODE_ACRO_ENABLED
 
 #if FRAME_CONFIG == HELI_FRAME
 /*
@@ -45,14 +45,14 @@ void ModeAcro_Heli::run()
     switch (motors->get_spool_state()) {
     case AP_Motors::SpoolState::SHUT_DOWN:
         // Motors Stopped
-        attitude_control->reset_target_and_rate();
+        attitude_control->reset_target_and_rate(false);
         attitude_control->reset_rate_controller_I_terms();
         break;
     case AP_Motors::SpoolState::GROUND_IDLE:
         // If aircraft is landed, set target heading to current and reset the integrator
         // Otherwise motors could be at ground idle for practice autorotation
         if ((motors->init_targets_on_arming() && motors->using_leaky_integrator()) || (copter.ap.land_complete && !motors->using_leaky_integrator())) {
-            attitude_control->reset_target_and_rate();
+            attitude_control->reset_target_and_rate(false);
             attitude_control->reset_rate_controller_I_terms_smoothly();
         }
         break;
@@ -69,7 +69,7 @@ void ModeAcro_Heli::run()
 
     if (!motors->has_flybar()){
         // convert the input to the desired body frame rate
-        get_pilot_desired_angle_rates(channel_roll->get_control_in(), channel_pitch->get_control_in(), channel_yaw->get_control_in(), target_roll, target_pitch, target_yaw);
+        get_pilot_desired_angle_rates(channel_roll->norm_input_dz(), channel_pitch->norm_input_dz(), channel_yaw->norm_input_dz(), target_roll, target_pitch, target_yaw);
         // only mimic flybar response when trainer mode is disabled
         if ((Trainer)g.acro_trainer.get() == Trainer::OFF) {
             // while landed always leak off target attitude to current attitude
@@ -111,7 +111,7 @@ void ModeAcro_Heli::run()
             // if there is no external gyro then run the usual
             // ACRO_YAW_P gain on the input control, including
             // deadzone
-            yaw_in = get_pilot_desired_yaw_rate(channel_yaw->get_control_in());
+            yaw_in = get_pilot_desired_yaw_rate();
         }
 
         // run attitude controller
@@ -144,7 +144,7 @@ void ModeAcro_Heli::virtual_flybar( float &roll_out, float &pitch_out, float &ya
     rate_ef_level.z = 0;
 
     // convert earth-frame leak rates to body-frame leak rates
-    attitude_control->euler_rate_to_ang_vel(attitude_control->get_att_target_euler_cd()*radians(0.01f), rate_ef_level, rate_bf_level);
+    attitude_control->euler_rate_to_ang_vel(attitude_control->get_attitude_target_quat(), rate_ef_level, rate_bf_level);
 
     // combine earth frame rate corrections with rate requests
     roll_out += rate_bf_level.x;
@@ -153,4 +153,4 @@ void ModeAcro_Heli::virtual_flybar( float &roll_out, float &pitch_out, float &ya
 
 }
 #endif  //HELI_FRAME
-#endif  //MODE_ACRO_ENABLED == ENABLED
+#endif  //MODE_ACRO_ENABLED

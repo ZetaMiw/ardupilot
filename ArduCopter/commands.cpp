@@ -30,7 +30,7 @@ void Copter::set_home_to_current_location_inflight() {
             return;
         }
         // we have successfully set AHRS home, set it for SmartRTL
-#if MODE_SMARTRTL_ENABLED == ENABLED
+#if MODE_SMARTRTL_ENABLED
         g2.smart_rtl.set_home(true);
 #endif
     }
@@ -45,7 +45,7 @@ bool Copter::set_home_to_current_location(bool lock) {
             return false;
         }
         // we have successfully set AHRS home, set it for SmartRTL
-#if MODE_SMARTRTL_ENABLED == ENABLED
+#if MODE_SMARTRTL_ENABLED
         g2.smart_rtl.set_home(true);
 #endif
         return true;
@@ -54,7 +54,6 @@ bool Copter::set_home_to_current_location(bool lock) {
 }
 
 // set_home - sets ahrs home (used for RTL) to specified location
-//  initialises inertial nav and compass on first call
 //  returns true if home location set successfully
 bool Copter::set_home(const Location& loc, bool lock)
 {
@@ -64,32 +63,9 @@ bool Copter::set_home(const Location& loc, bool lock)
         return false;
     }
 
-    // check home is close to EKF origin
-    if (far_from_EKF_origin(loc)) {
-        return false;
-    }
-
-    const bool home_was_set = ahrs.home_is_set();
-
     // set ahrs home (used for RTL)
     if (!ahrs.set_home(loc)) {
         return false;
-    }
-
-    // init inav and compass declination
-    if (!home_was_set) {
-        // record home is set
-        AP::logger().Write_Event(LogEvent::SET_HOME);
-
-#if MODE_AUTO_ENABLED == ENABLED
-        // log new home position which mission library will pull from ahrs
-        if (should_log(MASK_LOG_CMD)) {
-            AP_Mission::Mission_Command temp_cmd;
-            if (mode_auto.mission.read_cmd_from_storage(0, temp_cmd)) {
-                logger.Write_Mission_Cmd(mode_auto.mission, temp_cmd);
-            }
-        }
-#endif
     }
 
     // lock home position
@@ -99,23 +75,4 @@ bool Copter::set_home(const Location& loc, bool lock)
 
     // return success
     return true;
-}
-
-// far_from_EKF_origin - checks if a location is too far from the EKF origin
-//  returns true if too far
-bool Copter::far_from_EKF_origin(const Location& loc)
-{
-    // check distance to EKF origin
-    Location ekf_origin;
-    if (ahrs.get_origin(ekf_origin)) {
-        if ((ekf_origin.get_distance(loc) > EKF_ORIGIN_MAX_DIST_KM*1000.0)) {
-            return true;
-        }
-        if (labs(ekf_origin.alt - loc.alt)*0.01 > EKF_ORIGIN_MAX_ALT_KM*1000.0) {
-            return true;
-        }
-    }
-
-    // close enough to origin
-    return false;
 }

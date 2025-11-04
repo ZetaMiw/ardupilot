@@ -1,5 +1,8 @@
 -- mission editing demo lua script.
 -- by Buzz 2020
+---@diagnostic disable: param-type-mismatch
+---@diagnostic disable: undefined-field
+
 current_pos = nil
 home = 0
 a = {}
@@ -7,7 +10,7 @@ demostage = 0
 eventcounter = 0
 
 function update () -- periodic function that will be called
-    current_pos = ahrs:get_position()
+    current_pos = ahrs:get_location()
 
   -- adds new/extra mission item at the end by copying the last one and modifying it
   -- get number of last mission item
@@ -197,7 +200,7 @@ function stage7 ()
       -- fiurst time in , there's no mission, lets throw a few wps in to play with later..
       -- change copy of last item slightly, for giggles, and append as a new item
       if (mission:num_commands() == 1)  then
-          for x = 1, 10 do 
+          for _ = 1, 10 do 
               m:command(16) -- 16 = normal WAYPOINT
               m:x(m:x()+math.random(-10000,10000)) -- add something random 
               m:y(m:y()+math.random(-10000,10000)) 
@@ -257,7 +260,7 @@ function stage7 ()
 end
 
 function wait_for_home()
-  current_pos = ahrs:get_position()
+  current_pos = ahrs:get_location()
   if current_pos == nil then
      return wait_for_home, 1000
   end

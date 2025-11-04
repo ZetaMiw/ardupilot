@@ -35,23 +35,29 @@
     LOG_RMGI_MSG, \
     LOG_ROFH_MSG, \
     LOG_REPH_MSG, \
+    LOG_RSLL_MSG, \
     LOG_REVH_MSG, \
     LOG_RWOH_MSG, \
     LOG_RBOH_MSG
 
-// Replay Data Structures
+// @LoggerMessage: RFRH
+// @Description: Replay FRame Header
 struct log_RFRH {
     uint64_t time_us;
     uint32_t time_flying_ms;
     uint8_t _end;
 };
 
+// @LoggerMessage: RFRF
+// @Description: Replay FRame data - Finished frame
 struct log_RFRF {
     uint8_t frame_types;
     uint8_t core_slow;
     uint8_t _end;
 };
 
+// @LoggerMessage: RFRN
+// @Description: Replay FRame - aNother frame header
 struct log_RFRN {
     int32_t lat;
     int32_t lng;
@@ -62,7 +68,7 @@ struct log_RFRN {
     uint8_t vehicle_class;
     uint8_t ekf_type;
     uint8_t armed:1;
-    uint8_t get_compass_is_null:1;
+    uint8_t unused:1;  // was get_compass_is_null
     uint8_t fly_forward:1;
     uint8_t ahrs_airspeed_sensor_enabled:1;
     uint8_t opticalflow_enabled:1;
@@ -72,18 +78,20 @@ struct log_RFRN {
     uint8_t _end;
 };
 
-// Replay Data Structure - Inertial Sensor header
+// @LoggerMessage: RISH
+// @Description: Replay Inertial Sensor header
 struct log_RISH {
     uint16_t loop_rate_hz;
-    uint8_t primary_gyro;
-    uint8_t primary_accel;
+    uint8_t first_usable_gyro;
+    uint8_t first_usable_accel;
     float loop_delta_t;
     uint8_t accel_count;
     uint8_t gyro_count;
     uint8_t _end;
 };
 
-// Replay Data Structure - Inertial Sensor instance data
+// @LoggerMessage: RISI
+// @Description: Replay Inertial Sensor instance data
 struct log_RISI {
     Vector3f delta_velocity;
     Vector3f delta_angle;
@@ -98,14 +106,14 @@ struct log_RISI {
 };
 
 // @LoggerMessage: REV2
-// @Description: Replay Event
+// @Description: Replay Event (EKF2)
 struct log_REV2 {
     uint8_t event;
     uint8_t _end;
 };
 
 // @LoggerMessage: RSO2
-// @Description: Replay Set Origin event
+// @Description: Replay Set Origin event (EKF2)
 struct log_RSO2 {
     int32_t lat;
     int32_t lng;
@@ -114,7 +122,7 @@ struct log_RSO2 {
 };
 
 // @LoggerMessage: RWA2
-// @Description: Replay set-default-airspeed event
+// @Description: Replay set-default-airspeed event (EKF2)
 struct log_RWA2 {
     float airspeed;
     float uncertainty;
@@ -122,8 +130,14 @@ struct log_RWA2 {
 };
 
 // same structures for EKF3
+// @LoggerMessage: REV3
+// @Description: Replay Event (EKF3)
 #define log_REV3 log_REV2
+// @LoggerMessage: RSO3
+// @Description: Replay Set Origin event (EKF3)
 #define log_RSO3 log_RSO2
+// @LoggerMessage: RWA3
+// @Description: Replay set-default-airspeed event (EKF3)
 #define log_RWA3 log_RWA2
 
 // @LoggerMessage: REY3
@@ -158,8 +172,8 @@ struct log_RBRI {
 // @Description: Replay Data Rangefinder Header
 struct log_RRNH {
     // this is rotation-pitch-270!
-    int16_t ground_clearance_cm;
-    int16_t max_distance_cm;
+    float ground_clearance;
+    float max_distance;
     uint8_t num_sensors;
     uint8_t _end;
 };
@@ -168,7 +182,7 @@ struct log_RRNH {
 // @Description: Replay Data Rangefinder Instance
 struct log_RRNI {
     Vector3f pos_offset;
-    uint16_t distance_cm;
+    float distance;
     uint8_t orientation;
     uint8_t status;
     uint8_t instance;
@@ -208,6 +222,7 @@ struct log_RGPJ {
     float sacc;
     float yaw_deg;
     float yaw_accuracy_deg;
+    uint32_t yaw_deg_time_ms;
     int32_t lat;
     int32_t lng;
     int32_t alt;
@@ -218,14 +233,16 @@ struct log_RGPJ {
     uint8_t _end;
 };
 
-// Replay Data Structure - Airspeed Sensor header
+// @LoggerMessage: RASH
+// @Description: Replay Airspeed Sensor Header
 struct log_RASH {
     uint8_t num_sensors;
     uint8_t primary;
     uint8_t _end;
 };
 
-// Replay Data Structure - Airspeed Sensor instance
+// @LoggerMessage: RASI
+// @Description: Replay Airspeed Sensor Instance data
 struct log_RASI {
     float airspeed;
     uint32_t last_update_ms;
@@ -239,6 +256,7 @@ struct log_RASI {
 // @Description: Replay Data Magnetometer Header
 struct log_RMGH {
     float declination;
+    bool available;
     uint8_t count;
     bool auto_declination_enabled;
     uint8_t num_enabled;
@@ -304,6 +322,7 @@ struct log_ROFH {
     Vector2f rawGyroRates;
     uint32_t msecFlowMeas;
     Vector3f posOffset;
+    float heightOverride;
     uint8_t rawFlowQuality;
     uint8_t _end;
 };
@@ -318,6 +337,16 @@ struct log_REPH {
     uint32_t timeStamp_ms;
     uint32_t resetTime_ms;
     uint16_t delay_ms;
+    uint8_t _end;
+};
+
+// @LoggerMessage: RSLL
+// @Description: Replay Set Lat Lng event
+struct log_RSLL {
+    int32_t lat; // WGS-84 latitude in 1E-7 degrees
+    int32_t lng; // WGS-84 longitude in 1E7 degrees
+    float posAccSD; // horizontal position 1 STD uncertainty (m)
+    uint32_t timestamp_ms;
     uint8_t _end;
 };
 
@@ -391,17 +420,17 @@ struct log_RBOH {
     { LOG_RBRI_MSG, RLOG_SIZE(RBRI),                                   \
       "RBRI", "IfBB", "LastUpdate,Alt,H,I", "---#", "----" }, \
     { LOG_RRNH_MSG, RLOG_SIZE(RRNH),                                   \
-      "RRNH", "hhB", "GCl,MaxD,NumSensors", "???", "???" },  \
+      "RRNH", "ffB", "GCl,MaxD,NumSensors", "mm-", "00-" },  \
     { LOG_RRNI_MSG, RLOG_SIZE(RRNI),                                   \
-      "RRNI", "fffHBBB", "PX,PY,PZ,Dist,Orient,Status,I", "------#", "-------" }, \
+      "RRNI", "ffffBBB", "PX,PY,PZ,Dist,Orient,Status,I", "---m--#", "---0---" }, \
     { LOG_RGPH_MSG, RLOG_SIZE(RGPH),                                   \
       "RGPH", "BB", "NumInst,Primary", "--", "--" },  \
     { LOG_RGPI_MSG, RLOG_SIZE(RGPI),                                   \
       "RGPI", "ffffBBBB", "OX,OY,OZ,Lg,Flags,Stat,NSats,I", "-------#", "--------" }, \
     { LOG_RGPJ_MSG, RLOG_SIZE(RGPJ),                                   \
-      "RGPJ", "IffffffiiiffHB", "TS,VX,VY,VZ,SA,Y,YA,Lat,Lon,Alt,HA,VA,HD,I", "-------------#", "--------------" }, \
+      "RGPJ", "IffffffIiiiffHB", "TS,VX,VY,VZ,SA,Y,YA,YT,Lat,Lon,Alt,HA,VA,HD,I", "--------------#", "---------------" }, \
     { LOG_RMGH_MSG, RLOG_SIZE(RMGH),                                   \
-      "RMGH", "BBfBBBB", "Dec,NumInst,AutoDec,NumEna,LOE,C,FUsable", "-------", "-------" },  \
+      "RMGH", "fBBBBBBB", "Dec,Avail,NumInst,AutoDec,NumEna,LOE,C,FUsable", "--------", "--------" },  \
     { LOG_RMGI_MSG, RLOG_SIZE(RMGI),                                   \
       "RMGI", "IffffffBBBB", "LU,OX,OY,OZ,FX,FY,FZ,UFY,H,HSF,I", "----------#", "-----------" },                                        \
     { LOG_RBCH_MSG, RLOG_SIZE(RBCH),                                   \
@@ -411,9 +440,11 @@ struct log_RBOH {
     { LOG_RVOH_MSG, RLOG_SIZE(RVOH),                                   \
       "RVOH", "fffIBB", "OX,OY,OZ,Del,H,Ena", "------", "------" }, \
     { LOG_ROFH_MSG, RLOG_SIZE(ROFH),                                   \
-      "ROFH", "ffffIfffB", "FX,FY,GX,GY,Tms,PX,PY,PZ,Qual", "---------", "---------" }, \
+      "ROFH", "ffffIffffB", "FX,FY,GX,GY,Tms,PX,PY,PZ,HgtOvr,Qual", "----------", "----------" }, \
     { LOG_REPH_MSG, RLOG_SIZE(REPH),                                   \
       "REPH", "fffffffffIIH", "PX,PY,PZ,Q1,Q2,Q3,Q4,PEr,AEr,TS,RT,D", "------------", "------------" }, \
+    { LOG_RSLL_MSG, RLOG_SIZE(RSLL),                         \
+      "RSLL", "IIfI", "Lat,Lng,PosAccSD,TS", "DU--", "GG--" }, \
     { LOG_REVH_MSG, RLOG_SIZE(REVH),                                   \
       "REVH", "ffffIH", "VX,VY,VZ,Er,TS,D", "------", "------" }, \
     { LOG_RWOH_MSG, RLOG_SIZE(RWOH),                                   \

@@ -5,15 +5,17 @@
  *
  */
 
+#include "AP_Airspeed_config.h"
+
+#if AP_AIRSPEED_ENABLED
+
 #include <AP_Common/AP_Common.h>
-#include <AP_HAL/AP_HAL.h>
 #include <AP_Math/AP_Math.h>
 #include <GCS_MAVLink/GCS.h>
-#include <AP_Baro/AP_Baro.h>
+#include <AP_AHRS/AP_AHRS.h>
 
 #include "AP_Airspeed.h"
 
-extern const AP_HAL::HAL& hal;
 
 // constructor - fill in all the initial values
 Airspeed_Calibration::Airspeed_Calibration()
@@ -23,7 +25,6 @@ Airspeed_Calibration::Airspeed_Calibration()
     , Q0(0.01f)
     , Q1(0.0000005f)
     , state(0, 0, 0)
-    , DT(1)
 {
 }
 
@@ -84,7 +85,7 @@ float Airspeed_Calibration::update(float airspeed, const Vector3f &vg, int16_t m
     state += KG*(TAS_mea - TAS_pred); // [3 x 1] + [3 x 1] * [1 x 1]
 
     // Update the covariance matrix
-    Vector3f HP2 = H_TAS * P;
+    Vector3f HP2 = H_TAS.row_times_mat(P);
     P -= KG.mul_rowcol(HP2);
 
     // force symmetry on the covariance matrix - necessary due to rounding
@@ -128,8 +129,8 @@ void AP_Airspeed::update_calibration(uint8_t i, const Vector3f &vground, int16_t
     state[i].calibration.state.z = 1.0f / sqrtf(ratio);
 
     // calculate true airspeed, assuming a airspeed ratio of 1.0
-    float dpress = MAX(get_differential_pressure(), 0);
-    float true_airspeed = sqrtf(dpress) * AP::baro().get_EAS2TAS();
+    float dpress = MAX(get_differential_pressure(i), 0);
+    float true_airspeed = sqrtf(dpress) * AP::ahrs().get_EAS2TAS();
 
     float zratio = state[i].calibration.update(true_airspeed, vground, max_airspeed_allowed_during_cal);
 
@@ -162,28 +163,43 @@ void AP_Airspeed::update_calibration(const Vector3f &vground, int16_t max_airspe
     for (uint8_t i=0; i<AIRSPEED_MAX_SENSORS; i++) {
         update_calibration(i, vground, max_airspeed_allowed_during_cal);
     }
+#if HAL_GCS_ENABLED && AP_AIRSPEED_AUTOCAL_ENABLE
     send_airspeed_calibration(vground);
+#endif
 }
 
 
+#if HAL_GCS_ENABLED && AP_AIRSPEED_AUTOCAL_ENABLE
 void AP_Airspeed::send_airspeed_calibration(const Vector3f &vground)
 {
-#if AP_AIRSPEED_AUTOCAL_ENABLE
-    const mavlink_airspeed_autocal_t packet{
+    /*
+      the AIRSPEED_AUTOCAL message doesn't have an instance number
+      so we can only send it for one sensor at a time
+     */
+    for (uint8_t i=0; i<AIRSPEED_MAX_SENSORS; i++) {
+        if (!param[i].autocal && !calibration_enabled) {
+            // auto-calibration not enabled on this sensor
+            continue;
+        }
+        const mavlink_airspeed_autocal_t packet{
         vx: vground.x,
         vy: vground.y,
         vz: vground.z,
-        diff_pressure: get_differential_pressure(primary),
-        EAS2TAS: AP::baro().get_EAS2TAS(),
-        ratio: param[primary].ratio.get(),
-        state_x: state[primary].calibration.state.x,
-        state_y: state[primary].calibration.state.y,
-        state_z: state[primary].calibration.state.z,
-        Pax: state[primary].calibration.P.a.x,
-        Pby: state[primary].calibration.P.b.y,
-        Pcz: state[primary].calibration.P.c.z
-    };
-    gcs().send_to_active_channels(MAVLINK_MSG_ID_AIRSPEED_AUTOCAL,
-                                  (const char *)&packet);
-#endif // AP_AIRSPEED_AUTOCAL_ENABLE
+        diff_pressure: get_differential_pressure(i),
+        EAS2TAS: AP::ahrs().get_EAS2TAS(),
+        ratio: param[i].ratio.get(),
+        state_x: state[i].calibration.state.x,
+        state_y: state[i].calibration.state.y,
+        state_z: state[i].calibration.state.z,
+        Pax: state[i].calibration.P.a.x,
+        Pby: state[i].calibration.P.b.y,
+        Pcz: state[i].calibration.P.c.z
+        };
+        gcs().send_to_active_channels(MAVLINK_MSG_ID_AIRSPEED_AUTOCAL,
+                                      (const char *)&packet);
+        break; // we can only send for one sensor
+    }
 }
+#endif  // HAL_GCS_ENABLED && AP_AIRSPEED_AUTOCAL_ENABLE
+
+#endif  // AP_AIRSPEED_ENABLED

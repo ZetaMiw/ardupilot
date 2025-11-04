@@ -1,7 +1,13 @@
+#include "AP_Tuning_config.h"
+
+#if AP_TUNING_ENABLED
+
 #include "AP_Tuning.h"
+
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
 #include <RC_Channel/RC_Channel.h>
+#include <AP_Notify/AP_Notify.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -49,7 +55,7 @@ const AP_Param::GroupInfo AP_Tuning::var_info[] = {
 
     // @Param: ERR_THRESH
     // @DisplayName: Controller error threshold
-    // @Description: This sets the controller error threshold above which an alarm will sound and a message will be sent to the GCS to warn of controller instability
+    // @Description: This sets the controller error threshold above which an alarm will sound and a message will be sent to the GCS to warn of controller instability while tuning. The error is the rms value of the P+D corrections in the loop. High values in hover indicate possible instability due to too high PID gains or excessively high D to P gain ratios.-1 will disable this message.
     // @Range: 0 1
     // @User: Standard
     AP_GROUPINFO("ERR_THRESH", 7, AP_Tuning, error_threshold, 0.15f),
@@ -85,7 +91,7 @@ void AP_Tuning::check_selector_switch(void)
             // save tune
             save_parameters();
             re_center();
-            gcs().send_text(MAV_SEVERITY_INFO, "Tuning: Saved");
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Tuning: Saved");
             AP_Notify::events.tune_save = 1;
             changed = false;
             need_revert = 0;
@@ -99,7 +105,7 @@ void AP_Tuning::check_selector_switch(void)
             } else if (hold_time < 2000) {
                 // re-center the value
                 re_center();
-                gcs().send_text(MAV_SEVERITY_INFO, "Tuning: recentered %s", get_tuning_name(current_parm));
+                GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Tuning: recentered %s", get_tuning_name(current_parm));
             } else if (hold_time < 5000) {
                 // change parameter
                 next_parameter();
@@ -117,6 +123,7 @@ void AP_Tuning::re_center(void)
     AP_Float *f = get_param_pointer(current_parm);
     if (f != nullptr) {
         center_value = f->get();
+        old_value = 0.0;
     }
     mid_point_wait = true;
 }
@@ -134,7 +141,7 @@ void AP_Tuning::check_input(uint8_t flightmode)
     // check for revert on changed flightmode
     if (flightmode != last_flightmode) {
         if (need_revert != 0 && mode_revert != 0) {
-            gcs().send_text(MAV_SEVERITY_INFO, "Tuning: reverted");
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Tuning: reverted");
             revert_parameters();
             re_center();
         }
@@ -189,9 +196,6 @@ void AP_Tuning::check_input(uint8_t flightmode)
         last_channel_value = chan_value;
     }
 
-    // check for controller error
-    check_controller_error();
-    
     if (fabsf(chan_value - last_channel_value) < 0.01) {
         // ignore changes of less than 1%
         return;
@@ -199,10 +203,10 @@ void AP_Tuning::check_input(uint8_t flightmode)
 
     //hal.console->printf("chan_value %.2f last_channel_value %.2f\n", chan_value, last_channel_value);
 
+    const float dead_zone = 0.02;
     if (mid_point_wait) {
         // see if we have crossed the mid-point. We use a small deadzone to make it easier
         // to move to the "indent" portion of a slider to start tuning
-        const float dead_zone = 0.02;
         if ((chan_value > dead_zone && last_channel_value > 0) ||
             (chan_value < -dead_zone && last_channel_value < 0)) {
             // still waiting
@@ -210,7 +214,6 @@ void AP_Tuning::check_input(uint8_t flightmode)
         }
         // starting tuning
         mid_point_wait = false;
-        gcs().send_text(MAV_SEVERITY_INFO, "Tuning: mid-point %s", get_tuning_name(current_parm));
         AP_Notify::events.tune_started = 1;
     }
     last_channel_value = chan_value;
@@ -224,10 +227,23 @@ void AP_Tuning::check_input(uint8_t flightmode)
     changed = true;
     need_revert |= (1U << current_parm_index);
     set_value(current_parm, new_value);
+
+    if ( fabsf(new_value-old_value) > (0.05 * old_value) ) {
+        old_value = new_value;
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, 
+            "Tuning: %s%s%0.4f", 
+            get_tuning_name(current_parm), 
+            ((chan_value < dead_zone) && (chan_value > -dead_zone)) ? "> " : ": ", 
+            (double)(new_value));
+    }
+
+#if HAL_LOGGING_ENABLED
     Log_Write_Parameter_Tuning(new_value);
+#endif
 }
 
 
+#if HAL_LOGGING_ENABLED
 /*
   log a tuning change
  */
@@ -247,6 +263,7 @@ void AP_Tuning::Log_Write_Parameter_Tuning(float value)
                                            (double)value,
                                            (double)center_value);
 }
+#endif
 
 /*
   save parameters in the set
@@ -316,7 +333,7 @@ void AP_Tuning::next_parameter(void)
             }
             current_parm = tuning_sets[i].parms[current_parm_index];
             re_center();
-            gcs().send_text(MAV_SEVERITY_INFO, "Tuning: started %s", get_tuning_name(current_parm));
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Tuning: started %s", get_tuning_name(current_parm));
             AP_Notify::events.tune_next = current_parm_index+1;
             break;
         }
@@ -336,18 +353,4 @@ const char *AP_Tuning::get_tuning_name(uint8_t parm)
     return "UNKNOWN";
 }
 
-/*
-  check for controller error
- */
-void AP_Tuning::check_controller_error(void)
-{
-    float err = controller_error(current_parm);
-    if (err > error_threshold) {
-        uint32_t now = AP_HAL::millis();
-        if (now - last_controller_error_ms > 2000 && hal.util->get_soft_armed()) {
-            AP_Notify::events.tune_error = 1;
-            gcs().send_text(MAV_SEVERITY_INFO, "Tuning: error %.2f", (double)err);
-            last_controller_error_ms = now;
-        }
-    }
-}
+#endif  // AP_TUNING_ENABLED

@@ -13,7 +13,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 /*
-  generic CAN sensor class, for easy creation of CAN sensors using prioprietary protocols
+  generic CAN sensor class, for easy creation of CAN sensors using proprietary protocols
  */
 #include <AP_HAL/AP_HAL.h>
 
@@ -21,6 +21,7 @@
 
 #include <AP_Scheduler/AP_Scheduler.h>
 #include "AP_CANSensor.h"
+#include <AP_BoardConfig/AP_BoardConfig.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -30,24 +31,36 @@ extern const AP_HAL::HAL& hal;
 #define debug_can(level_debug, fmt, args...)
 #endif
 
-CANSensor::CANSensor(const char *driver_name, AP_CANManager::Driver_Type dtype, uint16_t stack_size) :
+CANSensor::CANSensor(const char *driver_name, uint16_t stack_size) :
     _driver_name(driver_name),
     _stack_size(stack_size)
+{}
+
+
+void CANSensor::register_driver(AP_CAN::Protocol dtype)
 {
 #if HAL_CANMANAGER_ENABLED
     if (!AP::can().register_driver(dtype, this)) {
-        debug_can(AP_CANManager::LOG_ERROR, "Failed to register CANSensor %s", driver_name);
+        if (AP::can().register_11bit_driver(dtype, this, _driver_index)) {
+            is_aux_11bit_driver = true;
+            _can_driver = AP::can().get_driver(_driver_index);
+            _initialized = true;
+        } else {
+            debug_can(AP_CANManager::LOG_ERROR, "Failed to register CANSensor %s", _driver_name);
+        }
     } else {
-        debug_can(AP_CANManager::LOG_INFO, "%s: constructed", driver_name);
+        debug_can(AP_CANManager::LOG_INFO, "%s: constructed", _driver_name);
     }
 #elif defined(HAL_BUILD_AP_PERIPH)
     register_driver_periph(dtype);
 #endif
 }
+
+
 #ifdef HAL_BUILD_AP_PERIPH
 CANSensor::CANSensor_Periph CANSensor::_periph[HAL_NUM_CAN_IFACES];
 
-void CANSensor::register_driver_periph(const AP_CANManager::Driver_Type dtype)
+void CANSensor::register_driver_periph(const AP_CAN::Protocol dtype)
 {
     for (uint8_t i = 0; i < HAL_NUM_CAN_IFACES; i++) {
         if (_periph[i].protocol != dtype) {
@@ -115,28 +128,32 @@ bool CANSensor::add_interface(AP_HAL::CANIface* can_iface)
         return false;
     }
 
-    if (!_can_iface->set_event_handle(&_event_handle)) {
+    if (!_can_iface->set_event_handle(&sem_handle)) {
         debug_can(AP_CANManager::LOG_ERROR, "Cannot add event handle");
         return false;
     }
     return true;
 }
 
-bool CANSensor::write_frame(AP_HAL::CANFrame &out_frame, const uint64_t timeout_us)
+bool CANSensor::write_frame(AP_HAL::CANFrame &out_frame, const uint32_t timeout_us)
 {
     if (!_initialized) {
         debug_can(AP_CANManager::LOG_ERROR, "Driver not initialized for write_frame");
         return false;
     }
 
+    if (is_aux_11bit_driver && _can_driver != nullptr) {
+        return _can_driver->write_aux_frame(out_frame, timeout_us);
+    }
+
     bool read_select = false;
     bool write_select = true;
-    bool ret = _can_iface->select(read_select, write_select, &out_frame, AP_HAL::native_micros64() + timeout_us);
+    bool ret = _can_iface->select(read_select, write_select, &out_frame, AP_HAL::micros64() + timeout_us);
     if (!ret || !write_select) {
         return false;
     }
 
-    uint64_t deadline = AP_HAL::native_micros64() + 2000000;
+    uint64_t deadline = AP_HAL::micros64() + 2000000;
     return (_can_iface->send(out_frame, deadline, AP_HAL::CANIface::AbortOnError) == 1);
 }
 
@@ -154,12 +171,12 @@ void CANSensor::loop()
 #endif
 
     while (true) {
-        uint64_t timeout = AP_HAL::micros64() + LOOP_INTERVAL_US;
+        uint64_t deadline_us = AP_HAL::micros64() + LOOP_INTERVAL_US;
 
         // wait to receive frame
         bool read_select = true;
         bool write_select = false;
-        bool ret = _can_iface->select(read_select, write_select, nullptr, timeout);
+        bool ret = _can_iface->select(read_select, write_select, nullptr, deadline_us);
         if (ret && read_select) {
             uint64_t time;
             AP_HAL::CANIface::CanIOFlags flags {};
@@ -170,6 +187,58 @@ void CANSensor::loop()
             if (res == 1) {
                 handle_frame(frame);
             }
+        }
+    }
+}
+
+MultiCAN::MultiCANLinkedList* MultiCAN::callbacks;
+
+MultiCAN::MultiCAN(ForwardCanFrame cf, AP_CAN::Protocol can_type, const char *driver_name) :
+        CANSensor(driver_name)
+{
+    if (callbacks == nullptr) {
+        callbacks = NEW_NOTHROW MultiCANLinkedList();
+    }
+    if (callbacks == nullptr) {
+        AP_BoardConfig::allocation_error("Failed to create multican callback");
+    }
+
+    // Register new driver
+    register_driver(can_type);
+    callbacks->register_callback(cf);
+}
+
+// handle a received frame from the CAN bus
+void MultiCAN::handle_frame(AP_HAL::CANFrame &frame)
+{
+    if (callbacks != nullptr) {
+        callbacks->handle_frame(frame);
+    }
+
+}
+
+// register a callback for a CAN frame by adding it to the linked list
+void MultiCAN::MultiCANLinkedList::register_callback(ForwardCanFrame callback)
+{
+    CANSensor_Multi* newNode = NEW_NOTHROW CANSensor_Multi();
+    if (newNode == nullptr) {
+        AP_BoardConfig::allocation_error("Failed to create multican node");
+    }
+    WITH_SEMAPHORE(sem);
+    {
+        newNode->_callback = callback;
+        newNode->next = head;
+        head = newNode;
+    }
+}
+
+// distribute the CAN frame to the registered callbacks
+void MultiCAN::MultiCANLinkedList::handle_frame(AP_HAL::CANFrame &frame)
+{
+    WITH_SEMAPHORE(sem);
+    for (CANSensor_Multi* current = head; current != nullptr; current = current->next) {
+        if (current->_callback(frame)) {
+            return;
         }
     }
 }

@@ -1,3 +1,7 @@
+#include "SIM_config.h"
+
+#if AP_SIM_BATT_MONITOR_SMBUS_ROTOYE_ENABLED
+
 #include "SIM_BattMonitor_SMBus_Generic.h"
 
 #include <AP_Common/Bitmask.h>
@@ -15,7 +19,7 @@ namespace SITL {
 
 class SMBusBattRotoyeDevReg : public SMBusBattGenericDevReg {
 public:
-    static const uint8_t TEMP_EXT = 0x07;
+    static const uint8_t TEMP_EXT = 0x48;
 };
 
 class Rotoye : public SIM_BattMonitor_SMBus_Generic
@@ -33,3 +37,5 @@ private:
 };
 
 } // namespace SITL
+
+#endif  // AP_SIM_BATT_MONITOR_SMBUS_ROTOYE_ENABLED

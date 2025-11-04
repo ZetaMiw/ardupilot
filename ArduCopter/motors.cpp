@@ -2,7 +2,6 @@
 
 #define ARM_DELAY               20  // called at 10hz so 2 seconds
 #define DISARM_DELAY            20  // called at 10hz so 2 seconds
-#define AUTO_TRIM_DELAY         100 // called at 10hz so 10 seconds
 #define LOST_VEHICLE_DELAY      10  // called at 10hz so 1 second
 
 static uint32_t auto_disarm_begin;
@@ -16,10 +15,11 @@ void Copter::arm_motors_check()
     // check if arming/disarm using rudder is allowed
     AP_Arming::RudderArming arming_rudder = arming.get_rudder_arming_type();
     if (arming_rudder == AP_Arming::RudderArming::IS_DISABLED) {
+        arming_counter = 0;
         return;
     }
 
-#if TOY_MODE_ENABLED == ENABLED
+#if TOY_MODE_ENABLED
     if (g2.toy_mode.enabled()) {
         // not armed with sticks in toy mode
         return;
@@ -38,7 +38,7 @@ void Copter::arm_motors_check()
     if (yaw_in > 4000) {
 
         // increase the arming counter to a maximum of 1 beyond the auto trim counter
-        if (arming_counter <= AUTO_TRIM_DELAY) {
+        if (arming_counter < ARM_DELAY) {
             arming_counter++;
         }
 
@@ -48,15 +48,6 @@ void Copter::arm_motors_check()
             if (!arming.arm(AP_Arming::Method::RUDDER)) {
                 arming_counter = 0;
             }
-        }
-
-        // arm the motors and configure for flight
-        if (arming_counter == AUTO_TRIM_DELAY && motors->armed() && flightmode->mode_number() == Mode::Number::STABILIZE) {
-            gcs().send_text(MAV_SEVERITY_INFO, "AutoTrim start");
-            auto_trim_counter = 250;
-            auto_trim_started = false;
-            // ensure auto-disarm doesn't trigger immediately
-            auto_disarm_begin = millis();
         }
 
     // full left and rudder disarming is enabled
@@ -132,9 +123,10 @@ void Copter::auto_disarm_check()
 }
 
 // motors_output - send output to motors library which will adjust and send to ESCs and servos
-void Copter::motors_output()
+// full_push is true when slower rate updates (e.g. servo output) need to be performed at the main loop rate.
+void Copter::motors_output(bool full_push)
 {
-#if ADVANCED_FAILSAFE == ENABLED
+#if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
     // this is to allow the failsafe module to deliberately crash
     // the vehicle. Only used in extreme circumstances to meet the
     // OBC rules
@@ -155,31 +147,48 @@ void Copter::motors_output()
     // output any servo channels
     SRV_Channels::calc_pwm();
 
+    auto &srv = AP::srv();
+
     // cork now, so that all channel outputs happen at once
-    SRV_Channels::cork();
+    srv.cork();
 
     // update output on any aux channels, for manual passthru
     SRV_Channels::output_ch_all();
 
-    // check if we are performing the motor test
+    // update motors interlock state
+    bool interlock = motors->armed() && !ap.in_arming_delay && (!ap.using_interlock || ap.motor_interlock_switch) && !SRV_Channels::get_emergency_stop();
+    if (!motors->get_interlock() && interlock) {
+        motors->set_interlock(true);
+        LOGGER_WRITE_EVENT(LogEvent::MOTORS_INTERLOCK_ENABLED);
+    } else if (motors->get_interlock() && !interlock) {
+        motors->set_interlock(false);
+        LOGGER_WRITE_EVENT(LogEvent::MOTORS_INTERLOCK_DISABLED);
+    }
+
     if (ap.motor_test) {
+        // check if we are performing the motor test
         motor_test_output();
     } else {
-        bool interlock = motors->armed() && !ap.in_arming_delay && (!ap.using_interlock || ap.motor_interlock_switch) && !SRV_Channels::get_emergency_stop();
-        if (!motors->get_interlock() && interlock) {
-            motors->set_interlock(true);
-            AP::logger().Write_Event(LogEvent::MOTORS_INTERLOCK_ENABLED);
-        } else if (motors->get_interlock() && !interlock) {
-            motors->set_interlock(false);
-            AP::logger().Write_Event(LogEvent::MOTORS_INTERLOCK_DISABLED);
-        }
-
         // send output signals to motors
-        motors->output();
+        flightmode->output_to_motors();
     }
 
     // push all channels
-    SRV_Channels::push();
+    if (full_push) {
+        // motor output including servos and other updates that need to run at the main loop rate
+        srv.push();
+    } else {
+        // motor output only at main loop rate or faster
+        hal.rcout->push();
+    }
+}
+
+// motors_output from main thread at main loop rate
+void Copter::motors_output_main()
+{
+    if (!using_rate_thread) {
+        motors_output();
+    }
 }
 
 // check for pilot stick input to trigger lost vehicle alarm

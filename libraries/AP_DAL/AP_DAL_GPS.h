@@ -4,8 +4,6 @@
 
 #include <AP_Logger/LogStructure.h>
 
-#include <AP_Vehicle/AP_Vehicle_Type.h>
-
 class AP_DAL_GPS {
 public:
 
@@ -28,7 +26,9 @@ public:
     GPS_Status status() const {
         return status(primary_sensor());
     }
-    const Location &location(uint8_t instance) const;
+    const Location &location(uint8_t instance) const {
+        return tmp_location[instance];
+    }
     bool have_vertical_velocity(uint8_t instance) const {
         return _RGPI[instance].have_vertical_velocity;
     }
@@ -92,13 +92,10 @@ public:
         return speed_accuracy(primary_sensor(), sacc);
     }
 
-    bool gps_yaw_deg(float &yaw_deg, float &accuracy_deg) const {
-        return gps_yaw_deg(_RGPH.primary_sensor, yaw_deg, accuracy_deg);
-    }
-
-    bool gps_yaw_deg(uint8_t instance, float &yaw_deg, float &accuracy_deg) const {
+    bool gps_yaw_deg(uint8_t instance, float &yaw_deg, float &accuracy_deg, uint32_t &time_ms) const {
         yaw_deg = _RGPJ[instance].yaw_deg;
         accuracy_deg = _RGPJ[instance].yaw_accuracy_deg;
+        time_ms = _RGPJ[instance].yaw_deg_time_ms;
         return _RGPI[instance].gps_yaw_deg_returncode;
     }
 
@@ -130,6 +127,10 @@ public:
     }
     void handle_message(const log_RGPJ &msg) {
         _RGPJ[msg.instance] = msg;
+
+        tmp_location[msg.instance].lat = msg.lat;
+        tmp_location[msg.instance].lng = msg.lng;
+        tmp_location[msg.instance].alt = msg.alt;
     }
 
 private:
@@ -137,4 +138,6 @@ private:
     struct log_RGPH _RGPH;
     struct log_RGPI _RGPI[GPS_MAX_INSTANCES];
     struct log_RGPJ _RGPJ[GPS_MAX_INSTANCES];
+
+    Location tmp_location[GPS_MAX_INSTANCES];
 };

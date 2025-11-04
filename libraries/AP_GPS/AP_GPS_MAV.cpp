@@ -16,13 +16,13 @@
 //
 //  MAVLINK GPS driver
 //
+
+#include "AP_GPS_config.h"
+
+#if AP_GPS_MAV_ENABLED
+
 #include "AP_GPS_MAV.h"
 #include <stdint.h>
-
-AP_GPS_MAV::AP_GPS_MAV(AP_GPS &_gps, AP_GPS::GPS_State &_state, AP_HAL::UARTDriver *_port) :
-    AP_GPS_Backend(_gps, _state, _port)
-{
-}
 
 // Reading does nothing in this class; we simply return whether or not
 // the latest reading has been consumed.  By calling this function we assume
@@ -46,6 +46,11 @@ void AP_GPS_MAV::handle_msg(const mavlink_message_t &msg)
         case MAVLINK_MSG_ID_GPS_INPUT: {
             mavlink_gps_input_t packet;
             mavlink_msg_gps_input_decode(&msg, &packet);
+
+            // check if target instance belongs to incoming gps data.
+            if (state.instance != packet.gps_id) {
+                return;
+            }
 
             bool have_alt    = ((packet.ignore_flags & GPS_INPUT_IGNORE_FLAG_ALT) == 0);
             bool have_hdop   = ((packet.ignore_flags & GPS_INPUT_IGNORE_FLAG_HDOP) == 0);
@@ -85,8 +90,7 @@ void AP_GPS_MAV::handle_msg(const mavlink_message_t &msg)
                 }
 
                 state.velocity = vel;
-                state.ground_course = wrap_360(degrees(atan2f(vel.y, vel.x)));
-                state.ground_speed = norm(vel.x, vel.y);
+                velocity_to_speed_course(state);
             }
 
             if (have_sa) {
@@ -104,8 +108,11 @@ void AP_GPS_MAV::handle_msg(const mavlink_message_t &msg)
                 state.have_vertical_accuracy = true;
             }
 
+            const uint32_t now_ms = AP_HAL::millis();
+
             if (have_yaw) {
                 state.gps_yaw = wrap_360(packet.yaw*0.01);
+                state.gps_yaw_time_ms = now_ms;
                 state.have_gps_yaw = true;
                 state.gps_yaw_configured = true;
             }
@@ -120,54 +127,27 @@ void AP_GPS_MAV::handle_msg(const mavlink_message_t &msg)
                     first_week = packet.time_week;
                 }
                 uint32_t timestamp_ms = (packet.time_week - first_week) * AP_MSEC_PER_WEEK + packet.time_week_ms;
-                uint32_t corrected_ms = jitter.correct_offboard_timestamp_msec(timestamp_ms, AP_HAL::millis());
-                state.uart_timestamp_ms = corrected_ms;
+                uint32_t corrected_ms = jitter.correct_offboard_timestamp_msec(timestamp_ms, now_ms);
+                state.last_corrected_gps_time_us = (corrected_ms * 1000ULL);
+                state.corrected_timestamp_updated = true;
+                if (state.last_corrected_gps_time_us) {
+                    _last_itow_ms = state.time_week_ms;
+                    _have_itow = true;
+                }
+                if (have_yaw) {
+                    state.gps_yaw_time_ms = corrected_ms;
+                }
             }
 
             state.num_sats = packet.satellites_visible;
-            state.last_gps_time_ms = AP_HAL::millis();
+            state.last_gps_time_ms = now_ms;
             _new_data = true;
             break;
-            }
+        }
 
-        case MAVLINK_MSG_ID_HIL_GPS: {
-            mavlink_hil_gps_t packet;
-            mavlink_msg_hil_gps_decode(&msg, &packet);
-
-            state.time_week = 0;
-            state.time_week_ms  = packet.time_usec/1000;
-            state.status = (AP_GPS::GPS_Status)packet.fix_type;
-
-            Location loc = {};
-            loc.lat = packet.lat;
-            loc.lng = packet.lon;
-            loc.alt = packet.alt * 0.1f;
-            state.location = loc;
-            state.hdop = MIN(packet.eph, GPS_UNKNOWN_DOP);
-            state.vdop = MIN(packet.epv, GPS_UNKNOWN_DOP);
-            if (packet.vel < 65535) {
-                state.ground_speed = packet.vel * 0.01f;
-            }
-            Vector3f vel(packet.vn*0.01f, packet.ve*0.01f, packet.vd*0.01f);
-            state.velocity = vel;
-            if (packet.vd != 0) {
-                state.have_vertical_velocity = true;
-            }
-            if (packet.cog < 36000) {
-                state.ground_course = packet.cog * 0.01f;
-            }
-            state.have_speed_accuracy = false;
-            state.have_horizontal_accuracy = false;
-            state.have_vertical_accuracy = false;
-            if (packet.satellites_visible < 255) {
-                state.num_sats = packet.satellites_visible;
-            }
-            state.last_gps_time_ms = AP_HAL::millis();
-            _new_data = true;
-            break;
-            }
         default:
             // ignore all other messages
             break;
     }
 }
+#endif

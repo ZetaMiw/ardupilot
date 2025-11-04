@@ -39,8 +39,8 @@ local function decode_NMEA(byte)
             -- test the checksum
             string_complete = true
             return checksum == tonumber(term[term_number],16)
-        else
-            -- we could further decode the message data here
+
+        -- else -- we could further decode the message data here
         end
 
         if char == '*' then

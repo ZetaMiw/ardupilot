@@ -1,0 +1,17 @@
+#pragma once
+
+#include <AP_HAL/AP_HAL_Boards.h>
+
+#ifndef AP_FILTER_ENABLED
+#define AP_FILTER_ENABLED BOARD_FLASH_SIZE > 1024
+#endif
+
+#if AP_FILTER_ENABLED
+ #ifndef AP_FILTER_NUM_FILTERS
+ #if BOARD_FLASH_SIZE > 1024
+  #define AP_FILTER_NUM_FILTERS 8
+ #else
+  #define AP_FILTER_NUM_FILTERS 4
+ #endif // BOARD_FLASH_SIZE
+ #endif // AP_FILTER_NUM_FILTERS
+#endif // AP_FILTER_ENABLED

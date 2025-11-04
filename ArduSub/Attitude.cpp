@@ -5,7 +5,7 @@
 void Sub::get_pilot_desired_lean_angles(float roll_in, float pitch_in, float &roll_out, float &pitch_out, float angle_max)
 {
     // sanity check angle max parameter
-    aparm.angle_max = constrain_int16(aparm.angle_max,1000,8000);
+    aparm.angle_max.set(constrain_int16(aparm.angle_max,1000,8000));
 
     // limit max lean angle
     angle_max = constrain_float(angle_max, 1000, aparm.angle_max);
@@ -64,7 +64,7 @@ float Sub::get_roi_yaw()
     roi_yaw_counter++;
     if (roi_yaw_counter >= 4) {
         roi_yaw_counter = 0;
-        yaw_look_at_WP_bearing = get_bearing_cd(inertial_nav.get_position(), roi_WP);
+        yaw_look_at_WP_bearing = get_bearing_cd(inertial_nav.get_position_xy_cm(), roi_WP.xy());
     }
 
     return yaw_look_at_WP_bearing;
@@ -72,10 +72,10 @@ float Sub::get_roi_yaw()
 
 float Sub::get_look_ahead_yaw()
 {
-    const Vector3f& vel = inertial_nav.get_velocity();
-    float speed = norm(vel.x,vel.y);
+    const Vector3f& vel = inertial_nav.get_velocity_neu_cms();
+    const float speed_sq = vel.xy().length_squared();
     // Commanded Yaw to automatically look ahead.
-    if (position_ok() && (speed > YAW_LOOK_AHEAD_MIN_SPEED)) {
+    if (position_ok() && (speed_sq > (YAW_LOOK_AHEAD_MIN_SPEED * YAW_LOOK_AHEAD_MIN_SPEED))) {
         yaw_look_ahead_bearing = degrees(atan2f(vel.y,vel.x))*100.0f;
     }
     return yaw_look_ahead_bearing;
@@ -94,96 +94,54 @@ float Sub::get_pilot_desired_climb_rate(float throttle_control)
         return 0.0f;
     }
 
-    float desired_rate = 0.0f;
     float mid_stick = channel_throttle->get_control_mid();
-    float deadband_top = mid_stick + g.throttle_deadzone;
-    float deadband_bottom = mid_stick - g.throttle_deadzone;
+    float deadband_top = mid_stick + g.throttle_deadzone * gain;
+    float deadband_bottom = mid_stick - g.throttle_deadzone * gain;
 
     // ensure a reasonable throttle value
     throttle_control = constrain_float(throttle_control,0.0f,1000.0f);
 
     // ensure a reasonable deadzone
-    g.throttle_deadzone = constrain_int16(g.throttle_deadzone, 0, 400);
+    g.throttle_deadzone.set(constrain_int16(g.throttle_deadzone, 0, 400));
 
     // check throttle is above, below or in the deadband
     if (throttle_control < deadband_bottom) {
         // below the deadband
-        desired_rate = get_pilot_speed_dn() * (throttle_control-deadband_bottom) / deadband_bottom;
+        return get_pilot_speed_dn() * (throttle_control-deadband_bottom) / deadband_bottom;
     } else if (throttle_control > deadband_top) {
         // above the deadband
-        desired_rate = g.pilot_speed_up * (throttle_control-deadband_top) / (1000.0f-deadband_top);
+        return g.pilot_speed_up * (throttle_control-deadband_top) / (1000.0f-deadband_top);
     } else {
         // must be in the deadband
-        desired_rate = 0.0f;
+        return 0.0f;
     }
-
-    // desired climb rate for logging
-    desired_climb_rate = desired_rate;
-
-    return desired_rate;
 }
 
-// get_surface_tracking_climb_rate - hold vehicle at the desired distance above the ground
-//      returns climb rate (in cm/s) which should be passed to the position controller
-float Sub::get_surface_tracking_climb_rate(int16_t target_rate, float current_alt_target, float dt)
+// behavior is similar to Sub::get_pilot_desired_climb_rate
+float Sub::get_pilot_desired_horizontal_rate(RC_Channel *channel) const
 {
-#if RANGEFINDER_ENABLED == ENABLED
-    static uint32_t last_call_ms = 0;
-    float distance_error;
-    float velocity_correction;
-    float current_alt = inertial_nav.get_altitude();
-
-    uint32_t now = AP_HAL::millis();
-
-    // reset target altitude if this controller has just been engaged
-    if (now - last_call_ms > RANGEFINDER_TIMEOUT_MS) {
-        target_rangefinder_alt = rangefinder_state.alt_cm + current_alt_target - current_alt;
-    }
-    last_call_ms = now;
-
-    // adjust rangefinder target alt if motors have not hit their limits
-    if ((target_rate<0 && !motors.limit.throttle_lower) || (target_rate>0 && !motors.limit.throttle_upper)) {
-        target_rangefinder_alt += target_rate * dt;
+    if (failsafe.pilot_input) {
+        return 0;
     }
 
-    // do not let target altitude get too far from current altitude above ground
-    target_rangefinder_alt = constrain_float(target_rangefinder_alt,
-        rangefinder_state.alt_cm - pos_control.get_pos_error_z_down_cm(),
-        rangefinder_state.alt_cm + pos_control.get_pos_error_z_up_cm());
+    // forward and lateral sticks have center trim, unlike throttle
+    auto control = channel->norm_input();
 
-    // calc desired velocity correction from target rangefinder alt vs actual rangefinder alt (remove the error already passed to Altitude controller to avoid oscillations)
-    distance_error = (target_rangefinder_alt - rangefinder_state.alt_cm) - (current_alt_target - current_alt);
-    velocity_correction = distance_error * g.rangefinder_gain;
-    velocity_correction = constrain_float(velocity_correction, -THR_SURFACE_TRACKING_VELZ_MAX, THR_SURFACE_TRACKING_VELZ_MAX);
+    // normalize deadzone
+    auto dz = (float)g.throttle_deadzone * 2.0f / (float)(channel->get_radio_max() - channel->get_radio_min());
+    auto deadband_top = dz * gain;
+    auto deadband_bottom = -dz * gain;
 
-    // return combined pilot climb rate + rate to correct rangefinder alt error
-    return (target_rate + velocity_correction);
-#else
-    return (float)target_rate;
-#endif
-}
-
-// updates position controller's maximum altitude using fence and EKF limits
-void Sub::update_poscon_alt_max()
-{
-    // minimum altitude, ie. maximum depth
-    // interpreted as no limit if left as zero
-    float min_alt_cm = 0.0;
-
-    // no limit if greater than 100, a limit is necessary,
-    // or the vehicle will try to fly out of the water
-    float max_alt_cm = g.surface_depth; // minimum depth
-
-#if AC_FENCE == ENABLED
-    // set fence altitude limit in position controller
-    if ((fence.get_enabled_fences() & AC_FENCE_TYPE_ALT_MAX) != 0) {
-        min_alt_cm = fence.get_safe_alt_min()*100.0f;
-        max_alt_cm = fence.get_safe_alt_max()*100.0f;
+    if (control < deadband_bottom) {
+        // below the deadband
+        return (float)g.pilot_speed * (control - deadband_bottom);
+    } else if (control > deadband_top) {
+        // above the deadband
+        return (float)g.pilot_speed * (control - deadband_top);
+    } else {
+        // must be in the deadband
+        return 0;
     }
-#endif
-    // pass limit to pos controller
-    pos_control.set_alt_min(min_alt_cm);
-    pos_control.set_alt_max(max_alt_cm);
 }
 
 // rotate vector from vehicle's perspective to North-East frame

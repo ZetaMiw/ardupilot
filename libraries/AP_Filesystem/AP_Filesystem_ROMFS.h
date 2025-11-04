@@ -15,13 +15,19 @@
 
 #pragma once
 
+#include "AP_Filesystem_config.h"
+
+#if AP_FILESYSTEM_ROMFS_ENABLED
+
+#include <AP_HAL/Semaphores.h>
+
 #include "AP_Filesystem_backend.h"
 
 class AP_Filesystem_ROMFS : public AP_Filesystem_Backend
 {
 public:
     // functions that closely match the equivalent posix calls
-    int open(const char *fname, int flags) override;
+    int open(const char *fname, int flags, bool allow_absolute_paths = false) override;
     int close(int fd) override;
     int32_t read(int fd, void *buf, uint32_t count) override;
     int32_t write(int fd, const void *buf, uint32_t count) override;
@@ -52,6 +58,9 @@ public:
     void unload_file(FileData *fd) override;
     
 private:
+    // protect searching for free file/dir records when opening/closing
+    HAL_Semaphore record_sem;
+
     // only allow up to 4 files at a time
     static constexpr uint8_t max_open_file = 4;
     static constexpr uint8_t max_open_dir = 4;
@@ -68,3 +77,5 @@ private:
         struct dirent de;
     } dir[max_open_dir];
 };
+
+#endif  // AP_FILESYSTEM_ROMFS_ENABLED

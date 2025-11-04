@@ -1,6 +1,9 @@
 #pragma once
 
 #include "AP_Frsky_SPort.h"
+
+#if AP_FRSKY_SPORT_PASSTHROUGH_ENABLED
+
 #include <AP_RCTelemetry/AP_RCTelemetry.h>
 
 #include "AP_Frsky_SPortParser.h"
@@ -23,8 +26,8 @@ public:
     AP_Frsky_SPort_Passthrough(AP_HAL::UARTDriver *port, bool use_external_data, AP_Frsky_Parameters *&frsky_parameters) :
         AP_Frsky_SPort(port),
         AP_RCTelemetry(WFQ_LAST_ITEM),
-        _use_external_data(use_external_data),
-        _frsky_parameters(frsky_parameters)
+        _frsky_parameters(frsky_parameters),
+        _use_external_data(use_external_data)
     {
         singleton = this;
     }
@@ -73,6 +76,8 @@ public:
         MAV =           13,  // mavlite
 #endif //HAL_WITH_FRSKY_TELEM_BIDIRECTIONAL
         TERRAIN =       14, // 0x500B terrain data
+        WIND =          15, // 0x500C wind data
+        WAYPOINT =      16, // 0x500D waypoint data
         WFQ_LAST_ITEM       // must be last
     };
 
@@ -108,6 +113,8 @@ private:
     uint32_t calc_attiandrng(void);
     uint32_t calc_rpm(void);
     uint32_t calc_terrain(void);
+    uint32_t calc_wind(void);
+    uint32_t calc_waypoint(void);
 
     // use_external_data is set when this library will
     // be providing data to another transport, such as FPort
@@ -142,7 +149,6 @@ private:
     AP_Frsky_MAVlite_SPortToMAVlite sport_to_mavlite;
     AP_Frsky_MAVlite_MAVliteToSPort mavlite_to_sport;
 
-    void set_sensor_id(AP_Int8 idx, uint8_t &sensor);
     // tx/rx sport packet processing
     void queue_rx_packet(const AP_Frsky_SPort::sport_packet_t sp);
     void process_rx_queue(void);
@@ -153,7 +159,7 @@ private:
     bool send_message(const AP_Frsky_MAVlite_Message &txmsg);
     AP_Frsky_MAVliteMsgHandler mavlite{FUNCTOR_BIND_MEMBER(&AP_Frsky_SPort_Passthrough::send_message, bool, const AP_Frsky_MAVlite_Message &)};
 #endif
-
+    void set_sensor_id(AP_Int8 idx, uint8_t &sensor);
     void send_sport_frame(uint8_t frame, uint16_t appid, uint32_t data);
 
     // true if we need to respond to the last polling byte
@@ -169,3 +175,6 @@ private:
 namespace AP {
     AP_Frsky_SPort_Passthrough *frsky_passthrough_telem();
 };
+
+
+#endif  // AP_FRSKY_SPORT_PASSTHROUGH_ENABLED

@@ -21,20 +21,21 @@
   Tom Pittenger, November 2015
 */
 
-#include <AP_HAL/AP_HAL.h>
-#include <AP_HAL/AP_HAL_Boards.h>
-
-#ifndef HAL_ADSB_ENABLED
-#define HAL_ADSB_ENABLED !HAL_MINIMIZE_FEATURES && BOARD_FLASH_SIZE > 1024
-#endif
+#include "AP_ADSB_config.h"
 
 #if HAL_ADSB_ENABLED
 #include <AP_Common/AP_Common.h>
 #include <AP_Param/AP_Param.h>
 #include <AP_Common/Location.h>
 #include <GCS_MAVLink/GCS_MAVLink.h>
+#include <AP_GPS/AP_GPS_FixType.h>
 
 #define ADSB_MAX_INSTANCES             1   // Maximum number of ADSB sensor instances available on this platform
+
+#define ADSB_BITBASK_RF_CAPABILITIES_UAT_IN         (1 << 0)
+#define ADSB_BITBASK_RF_CAPABILITIES_1090ES_IN      (1 << 1)
+#define ADSB_BITBASK_RF_CAPABILITIES_UAT_OUT        (1 << 2)
+#define ADSB_BITBASK_RF_CAPABILITIES_1090ES_OUT     (1 << 3)
 
 class AP_ADSB_Backend;
 
@@ -42,14 +43,15 @@ class AP_ADSB {
 public:
     friend class AP_ADSB_Backend;
     friend class AP_ADSB_uAvionix_MAVLink;
+    friend class AP_ADSB_uAvionix_UCP;
     friend class AP_ADSB_Sagetech;
+    friend class AP_ADSB_Sagetech_MXS;
 
     // constructor
     AP_ADSB();
 
     /* Do not allow copies */
-    AP_ADSB(const AP_ADSB &other) = delete;
-    AP_ADSB &operator=(const AP_ADSB&) = delete;
+    CLASS_NO_COPY(AP_ADSB);
 
     // get singleton instance
     static AP_ADSB *get_singleton(void) {
@@ -61,6 +63,8 @@ public:
         None                = 0,
         uAvionix_MAVLink    = 1,
         Sagetech            = 2,
+        uAvionix_UCP        = 3,
+        Sagetech_MXS        = 4,
     };
 
     struct adsb_vehicle_t {
@@ -68,11 +72,77 @@ public:
         uint32_t last_update_ms; // last time this was refreshed, allows timeouts
     };
 
+    // enum for adsb optional features
+    enum class AdsbOption {
+        Ping200X_Send_GPS               = (1<<0),
+        Squawk_7400_FS_RC               = (1<<1),
+        Squawk_7400_FS_GCS              = (1<<2),
+        SagteTech_MXS_External_Config   = (1<<3),
+        Mode3_Only                      = (1<<4),
+    };
+
     // for holding parameters
     static const struct AP_Param::GroupInfo var_info[];
 
     // periodic task that maintains vehicle_list
     void update(void);
+
+    // a structure holding *this vehicle's* position-related information:
+    enum class AltType {
+        Barometric = 0,  // we use a specific model for this?
+        WGS84 = 1,
+    };
+    struct Loc : Location {
+        AltType loc_alt_type;  // more information on altitude in base class
+
+        AP_GPS_FixType fix_type;
+        uint64_t epoch_us;  // microseconds since 1970-01-01
+        uint64_t epoch_from_rtc_us;  // microseconds since 1970-01-01
+        bool have_epoch_from_rtc_us;
+        uint8_t satellites;
+
+        float horizontal_pos_accuracy;
+        bool horizontal_pos_accuracy_is_valid;
+
+        float vertical_pos_accuracy;
+        bool vertical_pos_accuracy_is_valid;
+
+        float horizontal_vel_accuracy;
+        bool horizontal_vel_accuracy_is_valid;
+
+        Vector3f vel_ned;
+
+        float vertRateD;  // m/s down
+        bool vertRateD_is_valid;
+
+        // methods to make us look much like the AP::gps() singleton:
+        AP_GPS_FixType status() const { return fix_type; }
+        const Vector3f &velocity() const {
+            return vel_ned;
+        }
+        uint64_t time_epoch_usec() const { return epoch_us; }
+
+        bool speed_accuracy(float &sacc) const;
+        bool horizontal_accuracy(float &hacc) const;
+        bool vertical_accuracy(float &vacc) const;
+
+        uint8_t num_sats() const { return satellites; }
+
+        // methods to make us look like the AP::ahrs() singleton:
+        const Vector2f &groundspeed_vector() const { return vel_ned.xy(); }
+        bool get_vert_pos_rate_D(float &velocity) const {
+            velocity = vertRateD;
+            return vertRateD_is_valid;
+        }
+
+        // data from a pressure sensor:
+        bool baro_is_healthy;
+        float baro_alt_press_diff_sea_level;
+
+    } _my_loc;
+
+    // periodic task that maintains vehicle_list
+    void update(const Loc &loc);
 
     // send ADSB_VEHICLE mavlink message, usually as a StreamRate
     void send_adsb_vehicle(mavlink_channel_t chan);
@@ -96,8 +166,6 @@ public:
 
     void set_is_auto_mode(const bool is_in_auto_mode) { out_state.is_in_auto_mode = is_in_auto_mode; }
     void set_is_flying(const bool is_flying) { out_state.is_flying = is_flying; }
-
-    UAVIONIX_ADSB_RF_HEALTH get_transceiver_status(void) const { return out_state.status; }
 
     // extract a location out of a vehicle item
     Location get_location(const adsb_vehicle_t &vehicle) const;
@@ -128,15 +196,28 @@ public:
     // mavlink message handler
     void handle_message(const mavlink_channel_t chan, const mavlink_message_t &msg);
 
+    void send_adsb_out_status(const mavlink_channel_t chan) const;
+
     // when true, a vehicle with that ICAO was found in database and the vehicle is populated.
     bool get_vehicle_by_ICAO(const uint32_t icao, adsb_vehicle_t &vehicle) const;
 
     uint32_t get_special_ICAO_target() const { return (uint32_t)_special_ICAO_target; };
-    void set_special_ICAO_target(const uint32_t new_icao_target) { _special_ICAO_target = (int32_t)new_icao_target; };
+    void set_special_ICAO_target(const uint32_t new_icao_target) { _special_ICAO_target.set((int32_t)new_icao_target); };
     bool is_special_vehicle(uint32_t icao) const { return _special_ICAO_target != 0 && (_special_ICAO_target == (int32_t)icao); }
 
     // confirm a value is a valid callsign
     static bool is_valid_callsign(uint16_t octal) WARN_IF_UNUSED;
+
+    static uint8_t convert_maxknots_to_enum(const float maxAircraftSpeed_knots);
+
+    // Convert base 8 or 16 to decimal. Used to convert an octal/hexadecimal value
+    // stored on a GCS as a string field in different format, but then transmitted
+    // over mavlink as a float which is always a decimal.
+    static uint32_t convert_base_to_decimal(const uint8_t baseIn, uint32_t inputNumber);
+
+    // Trigger a Mode 3/A transponder IDENT. This should only be done when requested to do so by an Air Traffic Controller.
+    // See wikipedia for IDENT explanation https://en.wikipedia.org/wiki/Transponder_(aeronautics)
+    bool ident_start();
 
     AP_ADSB::Type get_type(uint8_t instance) const;
 
@@ -169,14 +250,15 @@ private:
     // configure ADSB-out transceivers
     void handle_out_cfg(const mavlink_uavionix_adsb_out_cfg_t &packet);
 
+    // control ADSB-out transcievers
+    void handle_out_control(const mavlink_uavionix_adsb_out_control_t &packet);
+
     // mavlink handler
     void handle_transceiver_report(const mavlink_channel_t chan, const mavlink_uavionix_adsb_transceiver_health_report_t &packet);
 
     void detect_instance(uint8_t instance);
 
     AP_Int8 _type[ADSB_MAX_INSTANCES];
-
-    Location  _my_loc;
 
     bool _init_failed;
 
@@ -228,6 +310,22 @@ private:
             bool        was_set_externally;
         } cfg;
 
+        struct {
+            bool                          baroCrossChecked;
+            uint8_t                       airGroundState;
+            bool                          identActive;
+            bool                          modeAEnabled;
+            bool                          modeCEnabled;
+            bool                          modeSEnabled;
+            bool                          es1090TxEnabled;
+            int32_t                       externalBaroAltitude_mm;
+            uint16_t                      squawkCode;
+            uint8_t                       emergencyState;
+            uint8_t                       callsign[8];
+            bool                          x_bit;
+        } ctrl;
+
+        mavlink_uavionix_adsb_out_status_t tx_status;
     } out_state;
 
     uint8_t detected_num_instances;
@@ -235,19 +333,21 @@ private:
     // special ICAO of interest that ignored filters when != 0
     AP_Int32 _special_ICAO_target;
 
+    AP_Int32 _options;
+
     static const uint8_t _max_samples = 30;
     ObjectBuffer<adsb_vehicle_t> _samples{_max_samples};
 
     void push_sample(const adsb_vehicle_t &vehicle);
 
     // logging
-    AP_Int8 _log;
     void write_log(const adsb_vehicle_t &vehicle) const;
-    enum logging {
+    enum class Logging {
         NONE            = 0,
         SPECIAL_ONLY    = 1,
         ALL             = 2
     };
+    AP_Enum<Logging> _log;
 
     // reference to backend
     AP_ADSB_Backend *_backend[ADSB_MAX_INSTANCES];

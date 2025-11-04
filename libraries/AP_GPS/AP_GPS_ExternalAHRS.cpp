@@ -21,11 +21,6 @@
 
 #if HAL_EXTERNAL_AHRS_ENABLED
 
-AP_GPS_ExternalAHRS::AP_GPS_ExternalAHRS(AP_GPS &_gps, AP_GPS::GPS_State &_state, AP_HAL::UARTDriver *_port) :
-    AP_GPS_Backend(_gps, _state, _port)
-{
-}
-
 // Reading does nothing in this class; we simply return whether or not
 // the latest reading has been consumed.  By calling this function we assume
 // the caller is consuming the new data;
@@ -46,7 +41,7 @@ void AP_GPS_ExternalAHRS::handle_external(const AP_ExternalAHRS::gps_data_messag
 
     state.time_week = pkt.gps_week;
     state.time_week_ms = pkt.ms_tow;
-    if (pkt.fix_type == 0) {
+    if (pkt.fix_type == AP_GPS_FixType::NO_GPS) {
         state.status = AP_GPS::NO_FIX;
     } else {
         state.status = (AP_GPS::GPS_Status)pkt.fix_type;
@@ -67,8 +62,7 @@ void AP_GPS_ExternalAHRS::handle_external(const AP_ExternalAHRS::gps_data_messag
     state.velocity.y = pkt.ned_vel_east;
     state.velocity.z = pkt.ned_vel_down;
 
-    state.ground_course = wrap_360(degrees(atan2f(state.velocity.y, state.velocity.x)));
-    state.ground_speed = norm(state.velocity.y, state.velocity.x);
+    velocity_to_speed_course(state);
 
     state.have_speed_accuracy = true;
     state.have_horizontal_accuracy = true;

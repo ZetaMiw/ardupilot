@@ -17,13 +17,24 @@
 
 #pragma once
 
-#include <AP_HAL/AP_HAL.h>
+#include "AP_CANManager_config.h"
 
-#if HAL_MAX_CAN_PROTOCOL_DRIVERS
+#if HAL_CANMANAGER_ENABLED
+
+#include <AP_HAL/AP_HAL.h>
 
 #include <AP_Param/AP_Param.h>
 #include "AP_SLCANIface.h"
 #include "AP_CANDriver.h"
+#include <GCS_MAVLink/GCS_config.h>
+#if HAL_GCS_ENABLED
+#include <GCS_MAVLink/GCS_MAVLink.h>
+#include <AP_HAL/utility/RingBuffer.h>
+#endif
+
+#include "AP_CAN.h"
+
+class CANSensor;
 
 class AP_CANManager
 {
@@ -31,8 +42,7 @@ public:
     AP_CANManager();
 
     /* Do not allow copies */
-    AP_CANManager(const AP_CANManager &other) = delete;
-    AP_CANManager &operator=(const AP_CANManager&) = delete;
+    CLASS_NO_COPY(AP_CANManager);
 
     static AP_CANManager* get_singleton()
     {
@@ -50,23 +60,13 @@ public:
         LOG_DEBUG,
     };
 
-    enum Driver_Type : uint8_t {
-        Driver_Type_None = 0,
-        Driver_Type_UAVCAN = 1,
-        // 2 was KDECAN -- do not re-use
-        Driver_Type_ToshibaCAN = 3,
-        Driver_Type_PiccoloCAN = 4,
-        Driver_Type_CANTester = 5,
-        Driver_Type_EFI_NWPMU = 6,
-        Driver_Type_USD1 = 7,
-        Driver_Type_KDECAN = 8,
-        Driver_Type_MPPT_PacketDigital = 9,
-    };
-
     void init(void);
 
     // register a new driver
-    bool register_driver(Driver_Type dtype, AP_CANDriver *driver);
+    bool register_driver(AP_CAN::Protocol dtype, AP_CANDriver *driver);
+
+    // register a new auxillary sensor driver for 11 bit address frames
+    bool register_11bit_driver(AP_CAN::Protocol dtype, CANSensor *sensor, uint8_t &driver_index);
 
     // returns number of active CAN Drivers
     uint8_t get_num_drivers(void) const
@@ -77,7 +77,7 @@ public:
     // return driver for index i
     AP_CANDriver* get_driver(uint8_t i) const
     {
-        if (i < HAL_NUM_CAN_IFACES) {
+        if (i < ARRAY_SIZE(_drivers)) {
             return _drivers[i];
         }
         return nullptr;
@@ -90,20 +90,26 @@ public:
     }
     
     // Method to log status and debug information for review while debugging
-    void log_text(AP_CANManager::LogLevel loglevel, const char *tag, const char *fmt, ...);
+    void log_text(AP_CANManager::LogLevel loglevel, const char *tag, const char *fmt, ...) FMT_PRINTF(4,5);
 
     void log_retrieve(ExpandingString &str) const;
 
     // return driver type index i
-    Driver_Type get_driver_type(uint8_t i) const
+    AP_CAN::Protocol get_driver_type(uint8_t i) const
     {
-        if (i < HAL_NUM_CAN_IFACES) {
+        if (i < ARRAY_SIZE(_driver_type_cache)) {
             return _driver_type_cache[i];
         }
-        return Driver_Type_None;
+        return AP_CAN::Protocol::None;
     }
 
     static const struct AP_Param::GroupInfo var_info[];
+
+#if HAL_GCS_ENABLED
+    bool handle_can_forward(mavlink_channel_t chan, const mavlink_command_int_t &packet, const mavlink_message_t &msg);
+    void handle_can_frame(const mavlink_message_t &msg);
+    void handle_can_filter_modify(const mavlink_message_t &msg);
+#endif
 
 private:
 
@@ -120,9 +126,23 @@ private:
 
         static const struct AP_Param::GroupInfo var_info[];
 
+        enum class Options : uint32_t {
+            LOG_ALL_FRAMES = (1U<<0),
+        };
+
+        bool option_is_set(Options option) const {
+            return (_options & uint32_t(option)) != 0;
+        }
+
     private:
         AP_Int8 _driver_number;
         AP_Int32 _bitrate;
+        AP_Int32 _fdbitrate;
+        AP_Int32 _options;
+
+#if AP_CAN_LOGGING_ENABLED && HAL_LOGGING_ENABLED
+        uint8_t logging_id;
+#endif
     };
 
     //Parameter Interface for CANDrivers
@@ -139,26 +159,66 @@ private:
 
     private:
         AP_Int8 _driver_type;
-        AP_CANDriver* _testcan;
+        AP_Int8 _driver_type_11bit;
         AP_CANDriver* _uavcan;
-        AP_CANDriver* _kdecan;
         AP_CANDriver* _piccolocan;
     };
 
     CANIface_Params _interfaces[HAL_NUM_CAN_IFACES];
     AP_CANDriver* _drivers[HAL_MAX_CAN_PROTOCOL_DRIVERS];
     CANDriver_Params _drv_param[HAL_MAX_CAN_PROTOCOL_DRIVERS];
-    Driver_Type _driver_type_cache[HAL_MAX_CAN_PROTOCOL_DRIVERS];
+    AP_CAN::Protocol _driver_type_cache[HAL_MAX_CAN_PROTOCOL_DRIVERS];
 
     AP_Int8 _loglevel;
     uint8_t _num_drivers;
+#if AP_CAN_SLCAN_ENABLED
     SLCAN::CANIface _slcan_interface;
+#endif
+
     static AP_CANManager *_singleton;
 
     char* _log_buf;
     uint32_t _log_pos;
 
     HAL_Semaphore _sem;
+
+#if HAL_GCS_ENABLED
+    /*
+      handler for CAN frames from the registered callback, sending frames
+      out as CAN_FRAME messages
+    */
+    void can_frame_callback(uint8_t bus, const AP_HAL::CANFrame &frame, AP_HAL::CANIface::CanIOFlags flags);
+
+    struct {
+        mavlink_channel_t chan;
+        uint8_t system_id;
+        uint8_t component_id;
+        uint8_t frame_counter;
+        uint32_t last_callback_enable_ms;
+        HAL_Semaphore sem;
+        uint16_t num_filter_ids;
+        uint16_t *filter_ids;
+        uint8_t callback_id;
+        uint8_t callback_bus;
+    } can_forward;
+
+    // buffer for MAVCAN frames
+    struct BufferFrame {
+        uint8_t bus;
+        AP_HAL::CANFrame frame;
+    };
+    ObjectBuffer<BufferFrame> *frame_buffer;
+
+    void process_frame_buffer(void);
+#endif // HAL_GCS_ENABLED
+
+#if AP_CAN_LOGGING_ENABLED && HAL_LOGGING_ENABLED
+    /*
+      handler for CAN frames for logging
+    */
+    void can_logging_callback(uint8_t bus, const AP_HAL::CANFrame &frame, AP_HAL::CANIface::CanIOFlags flags);
+    void check_logging_enable(void);
+#endif
 };
 
 namespace AP
@@ -166,4 +226,4 @@ namespace AP
 AP_CANManager& can();
 }
 
-#endif
+#endif  // HAL_CANMANAGER_ENABLED

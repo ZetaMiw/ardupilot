@@ -15,11 +15,11 @@
 
 #include "AP_WindVane_RPM.h"
 
-// constructor
-AP_WindVane_RPM::AP_WindVane_RPM(AP_WindVane &frontend) :
-    AP_WindVane_Backend(frontend)
-{
-}
+#include "AP_WindVane_config.h"
+
+#if AP_WINDVANE_RPM_ENABLED
+
+#include <AP_RPM/AP_RPM.h>
 
 void AP_WindVane_RPM::update_speed()
 {
@@ -32,3 +32,5 @@ void AP_WindVane_RPM::update_speed()
         }
     }
 }
+
+#endif  // AP_WINDVANE_RPM_ENABLED

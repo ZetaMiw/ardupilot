@@ -20,10 +20,11 @@ void Copter::default_dead_zones()
 
 void Copter::init_rc_in()
 {
-    channel_roll     = rc().channel(rcmap.roll()-1);
-    channel_pitch    = rc().channel(rcmap.pitch()-1);
-    channel_throttle = rc().channel(rcmap.throttle()-1);
-    channel_yaw      = rc().channel(rcmap.yaw()-1);
+    // the library gaurantees that these are non-nullptr:
+    channel_roll     = &rc().get_roll_channel();
+    channel_pitch    = &rc().get_pitch_channel();
+    channel_throttle = &rc().get_throttle_channel();
+    channel_yaw      = &rc().get_yaw_channel();
 
     // set rc channel ranges
     channel_roll->set_angle(ROLL_PITCH_YAW_INPUT_MAX);
@@ -41,17 +42,23 @@ void Copter::init_rc_in()
  // init_rc_out -- initialise motors
 void Copter::init_rc_out()
 {
-    motors->set_loop_rate(scheduler.get_loop_rate_hz());
     motors->init((AP_Motors::motor_frame_class)g2.frame_class.get(), (AP_Motors::motor_frame_type)g.frame_type.get());
 
     // enable aux servos to cope with multiple output channels per motor
-    SRV_Channels::enable_aux_servos();
+    AP::srv().enable_aux_servos();
 
     // update rate must be set after motors->init() to allow for motor mapping
     motors->set_update_rate(g.rc_speed);
 
 #if FRAME_CONFIG != HELI_FRAME
-    motors->set_throttle_range(channel_throttle->get_radio_min(), channel_throttle->get_radio_max());
+    if (channel_throttle->configured()) {
+        // throttle inputs setup, use those to set motor PWM min and max if not already configured
+        motors->convert_pwm_min_max_param(channel_throttle->get_radio_min(), channel_throttle->get_radio_max());
+    } else {
+        // throttle inputs default, force set motor PWM min and max to defaults so they will not be over-written by a future change in RC min / max
+        motors->convert_pwm_min_max_param(1000, 2000);
+    }
+    motors->update_throttle_range();
 #else
     // setup correct scaling for ESCs like the UAVCAN ESCs which
     // take a proportion of speed.
@@ -71,13 +78,6 @@ void Copter::init_rc_out()
 }
 
 
-// enable_motor_output() - enable and output lowest possible value to motors
-void Copter::enable_motor_output()
-{
-    // enable motors
-    motors->output_min();
-}
-
 void Copter::read_radio()
 {
     const uint32_t tnow_ms = millis();
@@ -87,9 +87,6 @@ void Copter::read_radio()
 
         set_throttle_and_failsafe(channel_throttle->get_radio_in());
         set_throttle_zero_flag(channel_throttle->get_control_in());
-
-        // RC receiver must be attached if we've just got input
-        ap.rc_receiver_present = true;
 
         // pass pilot input through to motors (used to allow wiggling servos while disarmed on heli, single, coax copters)
         radio_passthrough_to_motors();
@@ -106,10 +103,9 @@ void Copter::read_radio()
         return;
     }
 
-    const uint32_t elapsed = tnow_ms - last_radio_update_ms;
-    // turn on throttle failsafe if no update from the RC Radio for 500ms or 2000ms if we are using RC_OVERRIDE
-    const uint32_t timeout = RC_Channels::has_active_overrides() ? FS_RADIO_RC_OVERRIDE_TIMEOUT_MS : FS_RADIO_TIMEOUT_MS;
-    if (elapsed < timeout) {
+    // trigger failsafe if no update from the RC Radio for RC_FS_TIMEOUT seconds
+    const uint32_t elapsed_ms = tnow_ms - last_radio_update_ms;
+    if (elapsed_ms < rc().get_fs_timeout_ms()) {
         // not timed out yet
         return;
     }
@@ -117,13 +113,13 @@ void Copter::read_radio()
         // throttle failsafe not enabled
         return;
     }
-    if (!ap.rc_receiver_present && !motors->armed()) {
+    if (!rc().has_ever_seen_rc_input() && !motors->armed()) {
         // we only failsafe if we are armed OR we have ever seen an RC receiver
         return;
     }
 
-    // Nobody ever talks to us.  Log an error and enter failsafe.
-    AP::logger().Write_Error(LogErrorSubsystem::RADIO, LogErrorCode::RADIO_LATE_FRAME);
+    // Log an error and enter failsafe.
+    LOGGER_WRITE_ERROR(LogErrorSubsystem::RADIO, LogErrorCode::RADIO_LATE_FRAME);
     set_failsafe_radio(true);
 }
 
@@ -139,7 +135,7 @@ void Copter::set_throttle_and_failsafe(uint16_t throttle_pwm)
     if (throttle_pwm < (uint16_t)g.failsafe_throttle_value) {
 
         // if we are already in failsafe or motors not armed pass through throttle and exit
-        if (failsafe.radio || !(ap.rc_receiver_present || motors->armed())) {
+        if (failsafe.radio || !(rc().has_ever_seen_rc_input() || motors->armed())) {
             return;
         }
 
@@ -180,7 +176,7 @@ void Copter::set_throttle_zero_flag(int16_t throttle_control)
     // and we are flying. Immediately set as non-zero
     if ((!ap.using_interlock && (throttle_control > 0) && !SRV_Channels::get_emergency_stop()) ||
         (ap.using_interlock && motors->get_interlock()) ||
-        ap.armed_with_switch || air_mode == AirMode::AIRMODE_ENABLED) {
+        ap.armed_with_airmode_switch || air_mode == AirMode::AIRMODE_ENABLED) {
         last_nonzero_throttle_ms = tnow_ms;
         ap.throttle_zero = false;
     } else if (tnow_ms - last_nonzero_throttle_ms > THROTTLE_ZERO_DEBOUNCE_TIME_MS) {
@@ -202,7 +198,7 @@ void Copter::radio_passthrough_to_motors()
  */
 int16_t Copter::get_throttle_mid(void)
 {
-#if TOY_MODE_ENABLED == ENABLED
+#if TOY_MODE_ENABLED
     if (g2.toy_mode.enabled()) {
         return g2.toy_mode.get_throttle_mid();
     }
